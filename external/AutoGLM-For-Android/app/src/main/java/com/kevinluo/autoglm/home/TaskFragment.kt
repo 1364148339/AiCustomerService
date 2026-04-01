@@ -34,6 +34,9 @@ import com.kevinluo.autoglm.util.showWithPrimaryButtons
 import com.kevinluo.autoglm.voice.VoiceError
 import com.kevinluo.autoglm.voice.VoiceInputManager
 import com.kevinluo.autoglm.voice.VoiceRecognitionResult
+import com.kevinluo.autoglm.network.AiMacrodroidService
+import com.kevinluo.autoglm.network.ConnectionState
+import com.kevinluo.autoglm.network.TokenManager
 import com.kevinluo.autoglm.voice.VoiceRecordingDialog
 import kotlinx.coroutines.launch
 
@@ -156,6 +159,15 @@ class TaskFragment : Fragment() {
         btnFloatingWindow.setOnClickListener {
             toggleFloatingWindow()
         }
+
+        // Connection Status buttons
+        btnReconnect.setOnClickListener {
+            reconnectAiMacrodroid()
+        }
+
+        btnUnbind.setOnClickListener {
+            unbindAiMacrodroid()
+        }
     }
 
     /**
@@ -183,8 +195,70 @@ class TaskFragment : Fragment() {
                         onPermissionStatesChanged(permissionStates)
                     }
                 }
+
+                launch {
+                    AiMacrodroidService.connectionState.collect { state ->
+                        updateConnectionStateUi(state)
+                    }
+                }
+
+                launch {
+                    AiMacrodroidService.currentRemoteTask.collect { taskId ->
+                        updateCurrentRemoteTaskUi(taskId)
+                    }
+                }
             }
         }
+    }
+
+    private fun updateConnectionStateUi(state: ConnectionState) {
+        val (text, color, icon) = when (state) {
+            ConnectionState.CONNECTED -> Triple("已连接", R.color.status_running, R.drawable.ic_check_circle)
+            ConnectionState.CONNECTING -> Triple("连接中...", R.color.status_paused, R.drawable.ic_refresh)
+            ConnectionState.DISCONNECTED -> Triple("未连接", R.color.text_secondary, R.drawable.ic_wifi)
+            ConnectionState.ERROR -> Triple("连接异常", R.color.status_failed, R.drawable.ic_error)
+        }
+        
+        tvConnectionStatus.text = text
+        tvConnectionStatus.setTextColor(ContextCompat.getColor(requireContext(), color))
+        ivConnectionStatusIcon.setImageResource(icon)
+        ivConnectionStatusIcon.setColorFilter(ContextCompat.getColor(requireContext(), color))
+    }
+
+    private fun updateCurrentRemoteTaskUi(taskId: String?) {
+        if (taskId != null) {
+            tvCurrentTask.text = "当前任务: $taskId"
+            tvCurrentTask.setTextColor(ContextCompat.getColor(requireContext(), R.color.primary))
+        } else {
+            tvCurrentTask.text = "无执行中任务"
+            tvCurrentTask.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary))
+        }
+    }
+
+    private fun reconnectAiMacrodroid() {
+        val baseUrl = settingsManager.getAiMacrodroidBaseUrl()
+        if (baseUrl.isBlank()) {
+            Toast.makeText(requireContext(), "请先在设置页配置 AiMacrodroid 后端地址", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AiMacrodroidService.stop(requireContext())
+        AiMacrodroidService.start(requireContext())
+        Toast.makeText(requireContext(), "正在重新连接...", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun unbindAiMacrodroid() {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("解除绑定")
+            .setMessage("确定要解除与 AiMacrodroid 后端的绑定吗？将清除设备 Token。")
+            .setPositiveButton("确定") { _, _ ->
+                AiMacrodroidService.stop(requireContext())
+                TokenManager.getInstance(requireContext()).clearToken()
+                settingsManager.setAiMacrodroidBaseUrl("")
+                settingsManager.setAiMacrodroidSecretKey("")
+                Toast.makeText(requireContext(), "已解除绑定", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .showWithPrimaryButtons()
     }
 
     /**

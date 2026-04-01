@@ -20,10 +20,10 @@
   - [x] SubTask 4.2: 实现事件回传逻辑 (`POST /api/devices/:id/events`)，包含截图上传、执行轨迹与状态。
   - [x] SubTask 4.3: 统一错误码映射 (如 `SHIZUKU_NOT_RUNNING`, `MODEL_TIMEOUT`) 并上报。
 
-- [ ] Task 5: UI 配置与状态展示
-  - [ ] SubTask 5.1: 在设置页新增 AiMacrodroid 后端 Base URL 与 Secret Key 配置项。
-  - [ ] SubTask 5.2: 在主页或悬浮窗展示当前设备在线状态与当前执行的远程任务信息。
-  - [ ] SubTask 5.3: 提供手动重连与解除绑定的功能。
+- [x] Task 5: UI 配置与状态展示
+  - [x] SubTask 5.1: 在设置页新增 AiMacrodroid 后端 Base URL 与 Secret Key 配置项。
+  - [x] SubTask 5.2: 在主页或悬浮窗展示当前设备在线状态与当前执行的远程任务信息。
+  - [x] SubTask 5.3: 提供手动重连与解除绑定的功能。
 
 # Task Dependencies
 - Task 2 depends on Task 1
