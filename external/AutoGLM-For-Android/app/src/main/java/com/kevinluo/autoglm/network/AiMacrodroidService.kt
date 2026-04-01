@@ -12,24 +12,9 @@ import androidx.core.app.NotificationCompat
 import com.kevinluo.autoglm.ComponentManager
 import com.kevinluo.autoglm.R
 import com.kevinluo.autoglm.network.model.EventReq
-import com.kevinluo.autoglm.task.TaskEvent
 import com.kevinluo.autoglm.task.TaskEventType
 import com.kevinluo.autoglm.task.TaskExecutionManager
-import com.kevinluo.autoglm.action.AgentAction
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.put
-import com.kevinluo.autoglm.util.ErrorHandler
-import com.kevinluo.autoglm.util.AutoGLMError
-import com.kevinluo.autoglm.util.ErrorType
-import com.kevinluo.autoglm.network.HmacUtil
-import com.kevinluo.autoglm.network.TokenManager
-import com.kevinluo.autoglm.network.AiMacrodroidApiClient
 import com.kevinluo.autoglm.network.model.DeviceRegisterReq
 import com.kevinluo.autoglm.network.model.HeartbeatReq
 import com.kevinluo.autoglm.util.Logger
@@ -57,32 +42,6 @@ enum class ConnectionState {
  */
 class AiMacrodroidService : Service() {
 
-    companion object {
-        private const val TAG = "AiMacrodroidService"
-        private const val NOTIFICATION_ID = 2001
-        
-        private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
-        val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
-
-        private val _currentRemoteTask = MutableStateFlow<String?>(null)
-        val currentRemoteTask: StateFlow<String?> = _currentRemoteTask.asStateFlow()
-        
-        fun start(context: Context) {
-            val intent = Intent(context, AiMacrodroidService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-        }
-        
-        fun stop(context: Context) {
-            context.stopService(Intent(context, AiMacrodroidService::class.java))
-            _connectionState.value = ConnectionState.DISCONNECTED
-            _currentRemoteTask.value = null
-        }
-    }
-
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val heartbeatIntervalMs = 30_000L // 30 seconds
     private val pollTaskIntervalMs = 5_000L // 5 seconds
@@ -95,7 +54,7 @@ class AiMacrodroidService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Logger.i(TAG, "AiMacrodroidService started")
-        
+
         serviceScope.launch {
             try {
                 if (registerDeviceIfNeeded()) {
@@ -107,7 +66,7 @@ class AiMacrodroidService : Service() {
                 Logger.e(TAG, "Error in AiMacrodroidService loop", e)
             }
         }
-        
+
         serviceScope.launch {
             try {
                 startTaskPollLoop()
@@ -115,7 +74,7 @@ class AiMacrodroidService : Service() {
                 Logger.e(TAG, "Error in AiMacrodroidService poll task loop", e)
             }
         }
-        
+
         serviceScope.launch {
             try {
                 observeTaskEvents()
@@ -315,12 +274,12 @@ class AiMacrodroidService : Service() {
                 }
                 else -> "RUNNING"
             }
-            
+
             val deviceId = deviceManager.deviceId
             var errorCode: String? = null
             var screenshotUrl: String? = null
             var thinking: String? = null
-            
+
             if (event.type == TaskEventType.FAILED) {
                 val errorMsg = event.data?.toString() ?: ""
                 errorCode = if (errorMsg.contains("Shizuku", ignoreCase = true)) {
@@ -339,7 +298,7 @@ class AiMacrodroidService : Service() {
             } else if (event.type == TaskEventType.THINKING_UPDATED) {
                 thinking = event.data as? String
             }
-            
+
             val req = EventReq(
                 taskId = event.taskId,
                 status = status,
@@ -349,7 +308,7 @@ class AiMacrodroidService : Service() {
                 thinking = thinking,
                 hmac = "placeholder" // Phase 1: can be empty or calculated
             )
-            
+
             // Calculate HMAC
             val token = tokenManager.getToken()
             val reqWithHmac = if (!token.isNullOrEmpty()) {
@@ -394,7 +353,13 @@ class AiMacrodroidService : Service() {
     companion object {
         private const val TAG = "AiMacrodroidService"
         private const val NOTIFICATION_ID = 2001
-        
+
+        private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+        val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+        private val _currentRemoteTask = MutableStateFlow<String?>(null)
+        val currentRemoteTask: StateFlow<String?> = _currentRemoteTask.asStateFlow()
+
         fun start(context: Context) {
             val intent = Intent(context, AiMacrodroidService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -403,9 +368,11 @@ class AiMacrodroidService : Service() {
                 context.startService(intent)
             }
         }
-        
+
         fun stop(context: Context) {
             context.stopService(Intent(context, AiMacrodroidService::class.java))
+            _connectionState.value = ConnectionState.DISCONNECTED
+            _currentRemoteTask.value = null
         }
     }
 }

@@ -1,7 +1,7 @@
 package com.kevinluo.autoglm.network
 
 import android.content.Context
-import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import com.kevinluo.autoglm.settings.SettingsManager
 import kotlinx.serialization.json.Json
 import okhttp3.Interceptor
