@@ -6,7 +6,10 @@ import com.aimacrodroid.domain.entity.Device;
 import com.aimacrodroid.domain.vo.DeviceReadinessVO;
 import com.aimacrodroid.domain.vo.DeviceRegisterVO;
 import com.aimacrodroid.domain.vo.DeviceStatusVO;
+import com.aimacrodroid.domain.vo.DeviceTaskVO;
 import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
 
 public interface DeviceService extends IService<Device> {
 
@@ -29,4 +32,6 @@ public interface DeviceService extends IService<Device> {
      * 获取设备就绪状态
      */
     DeviceReadinessVO getDeviceReadiness(String deviceId);
+
+    List<DeviceTaskVO> pullPendingTasks(String deviceId);
 }

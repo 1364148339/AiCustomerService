@@ -104,6 +104,8 @@ android.applicationVariants.all {
     }
 }
 
+val localSherpaAar = file("libs/sherpa-onnx-1.12.20.aar")
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -148,8 +150,11 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     // Sherpa-ONNX for offline speech recognition
-    // Available via JitPack: https://jitpack.io/#k2-fsa/sherpa-onnx
-    implementation("com.github.k2-fsa:sherpa-onnx:1.12.20")
+    if (localSherpaAar.exists()) {
+        implementation(files(localSherpaAar))
+    } else {
+        implementation("com.github.k2-fsa:sherpa-onnx:1.12.20")
+    }
 
     // Apache Commons Compress for tar.bz2 extraction
     implementation("org.apache.commons:commons-compress:1.28.0")

@@ -14,12 +14,13 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName(value = "amd_device", autoResultMap = true)
+@TableName(value = "t_device", autoResultMap = true)
 public class Device extends BaseEntity {
 
     /**
      * 设备唯一标识(如Android ID/MAC等)
      */
+    @TableField("device_code")
     private String deviceId;
 
     /**
@@ -45,61 +46,72 @@ public class Device extends BaseEntity {
     /**
      * Shizuku是否可用(0:否 1:是)
      */
+    @TableField(exist = false)
     private Integer shizukuAvailable;
 
     /**
      * 悬浮窗权限是否授予(0:否 1:是)
      */
+    @TableField(exist = false)
     private Integer overlayGranted;
 
     /**
      * 键盘是否启用(0:否 1:是)
      */
+    @TableField(exist = false)
     private Integer keyboardEnabled;
 
     /**
      * 是否支持SSE流式响应(0:否 1:是)
      */
+    @TableField(exist = false)
     private Integer sseSupported;
 
     /**
      * 设备能力集列表
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(value = "capability_json", typeHandler = JacksonTypeHandler.class)
     private Map<String, Object> capabilities;
 
     /**
      * 当前前台包名
      */
+    @TableField(exist = false)
     private String foregroundPkg;
 
     /**
      * 电量百分比(0-100)
      */
+    @TableField(exist = false)
     private Integer batteryPct;
 
     /**
      * 网络类型(WIFI/5G/4G等)
      */
+    @TableField(exist = false)
     private String networkType;
 
     /**
      * 是否在充电(0:否 1:是)
      */
+    @TableField(exist = false)
     private Integer isCharging;
 
     /**
      * 最近心跳时间
      */
+    @TableField("last_seen_at")
     private LocalDateTime lastHeartbeatTime;
 
     /**
      * 设备鉴权Token(用于HMAC验签)
      */
+    @TableField("token_hash")
     private String token;
 
     /**
      * 设备状态(ONLINE/OFFLINE)
      */
+    @TableField("device_status")
     private String status;
 }

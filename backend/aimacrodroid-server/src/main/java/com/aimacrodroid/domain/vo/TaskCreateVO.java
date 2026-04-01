@@ -17,4 +17,10 @@ public class TaskCreateVO {
 
     @Schema(description = "任务状态", example = "QUEUED")
     private String status;
+
+    @Schema(description = "场景唯一标识")
+    private String scenarioKey;
+
+    @Schema(description = "场景名称")
+    private String scenarioName;
 }

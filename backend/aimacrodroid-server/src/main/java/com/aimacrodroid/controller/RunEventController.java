@@ -28,9 +28,10 @@ public class RunEventController {
         return Result.success();
     }
 
-    @Operation(summary = "获取所有流水事件", description = "获取设备端回传的所有日志记录(仅作调试)")
+    @Operation(summary = "查询执行日志", description = "按任务和设备筛选执行日志")
     @GetMapping("/events")
-    public Result<List<RunEvent>> listAll() {
-        return Result.success(runEventService.list());
+    public Result<List<RunEvent>> listAll(@RequestParam(value = "taskId", required = false) Long taskId,
+                                          @RequestParam(value = "deviceId", required = false) String deviceId) {
+        return Result.success(runEventService.queryLogs(taskId, deviceId));
     }
 }

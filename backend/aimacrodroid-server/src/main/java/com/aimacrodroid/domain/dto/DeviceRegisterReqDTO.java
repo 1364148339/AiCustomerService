@@ -5,8 +5,6 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
-import java.util.Map;
-
 @Data
 @Schema(description = "设备注册请求参数")
 public class DeviceRegisterReqDTO {
@@ -28,20 +26,20 @@ public class DeviceRegisterReqDTO {
     private String resolution;
 
     @NotNull(message = "Shizuku可用状态不能为空")
-    @Schema(description = "Shizuku是否可用(0:否 1:是)", example = "1")
-    private Integer shizukuAvailable;
+    @Schema(description = "Shizuku是否可用(支持布尔或0/1)", example = "true")
+    private Object shizukuAvailable;
 
     @NotNull(message = "悬浮窗权限状态不能为空")
-    @Schema(description = "悬浮窗权限是否授予(0:否 1:是)", example = "1")
-    private Integer overlayGranted;
+    @Schema(description = "悬浮窗权限是否授予(支持布尔或0/1)", example = "true")
+    private Object overlayGranted;
 
     @NotNull(message = "键盘启用状态不能为空")
-    @Schema(description = "键盘是否启用(0:否 1:是)", example = "1")
-    private Integer keyboardEnabled;
+    @Schema(description = "键盘是否启用(支持布尔或0/1)", example = "true")
+    private Object keyboardEnabled;
 
-    @Schema(description = "是否支持SSE流式响应(0:否 1:是)", example = "1")
-    private Integer sseSupported = 0;
+    @Schema(description = "是否支持SSE流式响应(支持布尔或0/1)", example = "true")
+    private Object sseSupported;
 
-    @Schema(description = "设备能力集列表")
-    private Map<String, Object> capabilities;
+    @Schema(description = "设备能力集(支持列表或对象)")
+    private Object capabilities;
 }

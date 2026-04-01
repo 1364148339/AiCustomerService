@@ -12,9 +12,16 @@ import java.util.Map;
 @Schema(description = "事件回传请求参数")
 public class EventReportReqDTO {
 
+    @NotBlank(message = "事件号不能为空")
+    @Schema(description = "事件幂等号")
+    private String eventNo;
+
     @NotNull(message = "任务ID不能为空")
     @Schema(description = "任务ID")
     private Long taskId;
+
+    @Schema(description = "步骤ID")
+    private Long stepId;
 
     @Schema(description = "指令业务ID(仅原子轨道必填)")
     private String commandId;

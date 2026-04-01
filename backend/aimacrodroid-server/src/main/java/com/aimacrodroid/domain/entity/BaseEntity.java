@@ -48,4 +48,8 @@ public class BaseEntity {
      */
     @TableLogic
     private Integer isDeleted;
+
+    private String deleter;
+
+    private LocalDateTime gmtDeleted;
 }

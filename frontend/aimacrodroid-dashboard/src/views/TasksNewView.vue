@@ -1,58 +1,101 @@
 <script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { createTask, getDevices } from '../mock/api'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { useDevicesStore } from '../stores/devices'
+import { useScenariosStore } from '../stores/scenarios'
+import { useTasksStore } from '../stores/tasks'
 
+const route = useRoute()
 const router = useRouter()
-const devices = ref([])
+const tasksStore = useTasksStore()
+const devicesStore = useDevicesStore()
+const scenariosStore = useScenariosStore()
 const submitting = ref(false)
 const result = ref(null)
 const form = ref({
-  type: 'CHECKIN',
-  track: 'ATOMIC',
-  devices: ['dev-01'],
+  scenarioKey: '',
+  devices: [],
   priority: 5,
-  intent: 'daily_checkin'
+  deadlineMs: null,
+  maxRetries: null,
+  snapshotLevel: '',
+  logDetail: ''
 })
 
-async function init() {
-  devices.value = await getDevices()
+const deviceOptions = computed(() => devicesStore.list)
+const scenarioOptions = computed(() => scenariosStore.list)
+const selectedScenario = computed(() =>
+  scenarioOptions.value.find((item) => item.scenarioKey === form.value.scenarioKey) || null
+)
+const payloadPreview = computed(() => JSON.stringify(buildPayload(), null, 2))
+
+function buildPayload() {
+  const payload = {
+    scenarioKey: form.value.scenarioKey,
+    devices: [...form.value.devices],
+    priority: Number(form.value.priority)
+  }
+  if (form.value.deadlineMs !== null || form.value.maxRetries !== null) {
+    payload.constraints = {}
+    if (form.value.deadlineMs !== null) payload.constraints.deadlineMs = form.value.deadlineMs
+    if (form.value.maxRetries !== null) payload.constraints.maxRetries = form.value.maxRetries
+  }
+  if (form.value.snapshotLevel || form.value.logDetail) {
+    payload.observability = {}
+    if (form.value.snapshotLevel) payload.observability.snapshotLevel = form.value.snapshotLevel
+    if (form.value.logDetail) payload.observability.logDetail = form.value.logDetail
+  }
+  return payload
 }
 
-function toggleDevice(deviceId) {
-  if (form.value.devices.includes(deviceId)) {
-    form.value.devices = form.value.devices.filter((id) => id !== deviceId)
-    return
-  }
-  form.value.devices.push(deviceId)
+function normalizeNonNegativeInteger(value) {
+  if (value === null || value === undefined || value === '') return null
+  const numeric = Number(value)
+  if (!Number.isInteger(numeric) || numeric < 0) return undefined
+  return numeric
 }
 
 async function submit() {
-  if (!form.value.devices.length) return
+  if (!form.value.scenarioKey) {
+    ElMessage.warning('请选择场景')
+    return
+  }
+  if (!form.value.devices.length) {
+    ElMessage.warning('请至少选择一台在线设备')
+    return
+  }
+  const deadlineMs = normalizeNonNegativeInteger(form.value.deadlineMs)
+  const maxRetries = normalizeNonNegativeInteger(form.value.maxRetries)
+  if (deadlineMs === undefined || maxRetries === undefined) {
+    ElMessage.warning('deadlineMs 与 maxRetries 必须为非负整数')
+    return
+  }
+  form.value.deadlineMs = deadlineMs
+  form.value.maxRetries = maxRetries
   submitting.value = true
-  const payload =
-    form.value.track === 'ATOMIC'
-      ? {
-          type: form.value.type,
-          track: 'ATOMIC',
-          devices: form.value.devices,
-          commands: [{ commandId: 'c1', action: 'find_and_tap', params: { target: 'text:签到' } }],
-          priority: form.value.priority
-        }
-      : {
-          type: form.value.type,
-          track: 'INTENT',
-          devices: form.value.devices,
-          intent: form.value.intent,
-          constraints: { deadlineMs: 600000, maxRetries: 2 },
-          successCriteria: { uiTextContains: ['签到成功', '已领取'] },
-          priority: form.value.priority
-        }
-  result.value = await createTask(payload)
-  submitting.value = false
+  try {
+    result.value = await tasksStore.submitTask(buildPayload())
+    await tasksStore.refreshList()
+    ElMessage.success(`任务已创建：${result.value.taskId}`)
+    router.push(`/tasks/${result.value.taskId}`)
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '创建任务失败')
+  } finally {
+    submitting.value = false
+  }
 }
 
-init()
+onMounted(async () => {
+  await Promise.all([devicesStore.refresh(), scenariosStore.refreshScenarios()])
+  const queryScenarioKey = String(route.query.scenarioKey || '')
+  if (queryScenarioKey) {
+    form.value.scenarioKey = queryScenarioKey
+  } else if (scenarioOptions.value.length > 0) {
+    form.value.scenarioKey = scenarioOptions.value[0].scenarioKey
+  }
+  form.value.devices = devicesStore.list.filter((item) => item.online).map((item) => item.id).slice(0, 1)
+})
 </script>
 
 <template>
@@ -60,65 +103,90 @@ init()
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <span>创建任务</span>
+          <span>任务创建</span>
+          <el-button type="primary" plain @click="tasksStore.refreshList">刷新任务列表</el-button>
         </div>
       </template>
 
-      <el-form :model="form" label-width="120px" style="max-width: 600px">
-        <el-form-item label="任务类型">
-          <el-select v-model="form.type" placeholder="请选择任务类型">
-            <el-option label="CHECKIN" value="CHECKIN" />
-            <el-option label="VIDEO_REWARD" value="VIDEO_REWARD" />
-          </el-select>
-        </el-form-item>
+      <el-row :gutter="20">
+        <el-col :span="14">
+          <el-form :model="form" label-width="120px">
+            <el-form-item label="场景">
+              <el-select v-model="form.scenarioKey" style="width: 260px">
+                <el-option
+                  v-for="item in scenarioOptions"
+                  :key="item.scenarioKey"
+                  :label="`${item.scenarioName} (${item.scenarioKey})`"
+                  :value="item.scenarioKey"
+                />
+              </el-select>
+            </el-form-item>
 
-        <el-form-item label="轨道">
-          <el-radio-group v-model="form.track">
-            <el-radio-button value="ATOMIC">ATOMIC</el-radio-button>
-            <el-radio-button value="INTENT">INTENT</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
+            <el-form-item label="优先级">
+              <el-input-number v-model="form.priority" :min="1" :max="9" />
+            </el-form-item>
 
-        <el-form-item label="优先级">
-          <el-input-number v-model="form.priority" :min="1" :max="9" />
-        </el-form-item>
+            <el-form-item label="截止时间(ms)">
+              <el-input-number v-model="form.deadlineMs" :min="0" :step="60000" />
+            </el-form-item>
 
-        <el-form-item label="Intent" v-if="form.track === 'INTENT'">
-          <el-input v-model="form.intent" placeholder="如: daily_checkin" />
-        </el-form-item>
+            <el-form-item label="最大重试">
+              <el-input-number v-model="form.maxRetries" :min="0" :max="20" />
+            </el-form-item>
 
-        <el-form-item label="选择设备">
-          <div class="device-list">
-            <el-checkbox-group v-model="form.devices">
-              <el-checkbox-button
-                v-for="item in devices"
-                :key="item.id"
-                :value="item.id"
-                :disabled="!item.online"
-              >
-                {{ item.id }} ({{ item.online ? '在线' : '离线' }})
-              </el-checkbox-button>
-            </el-checkbox-group>
-          </div>
-        </el-form-item>
+            <el-form-item label="场景说明">
+              <el-input :model-value="selectedScenario?.description || '--'" disabled />
+            </el-form-item>
 
-        <el-form-item>
-          <el-button type="primary" @click="submit" :loading="submitting" :disabled="form.devices.length === 0">
-            提交任务
-          </el-button>
-          <el-button v-if="result" @click="router.push(`/tasks/${result.taskId}`)">
-            查看任务详情
-          </el-button>
-        </el-form-item>
-      </el-form>
+            <el-form-item label="快照级别">
+              <el-select v-model="form.snapshotLevel" clearable style="width: 220px">
+                <el-option label="关键步骤" value="key-steps" />
+                <el-option label="全部步骤" value="all-steps" />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="日志级别">
+              <el-select v-model="form.logDetail" clearable style="width: 220px">
+                <el-option label="仅错误" value="errors_only" />
+                <el-option label="全部日志" value="all" />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="选择设备">
+              <el-checkbox-group v-model="form.devices" class="device-list">
+                <el-checkbox-button
+                  v-for="item in deviceOptions"
+                  :key="item.id"
+                  :value="item.id"
+                  :disabled="!item.online"
+                >
+                  {{ item.id }}（{{ item.online ? '在线' : '离线' }}）
+                </el-checkbox-button>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <el-form-item>
+              <el-button @click="router.push('/scenarios')">场景管理</el-button>
+              <el-button @click="router.push('/tasks')">任务列表</el-button>
+              <el-button type="primary" :loading="submitting" @click="submit">提交任务</el-button>
+            </el-form-item>
+          </el-form>
+        </el-col>
+
+        <el-col :span="10">
+          <el-card shadow="never" class="preview-card">
+            <template #header>请求预览</template>
+            <pre class="payload">{{ payloadPreview }}</pre>
+          </el-card>
+        </el-col>
+      </el-row>
 
       <el-alert
         v-if="result"
-        :title="`已创建任务：${result.taskId}，状态：${result.status}`"
+        :title="`已创建任务 ${result.taskNo || result.taskId}，状态 ${result.status}`"
         type="success"
         show-icon
         :closable="false"
-        style="margin-top: 20px; max-width: 600px;"
       />
     </el-card>
   </div>
@@ -128,11 +196,20 @@ init()
 .card-header {
   display: flex;
   align-items: center;
-  font-weight: bold;
+  justify-content: space-between;
 }
 .device-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
+}
+.preview-card {
+  height: 100%;
+}
+.payload {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--el-text-color-regular);
 }
 </style>
