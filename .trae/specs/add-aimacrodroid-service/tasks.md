@@ -1,0 +1,133 @@
+# Tasks
+- [ ] Task 1: 需求澄清与接口契约
+  - [ ] SubTask 1.1: 定义设备注册/心跳、命令下发、结果回传的 REST 契约（JSON）
+  - [ ] SubTask 1.2: 定义命令模板结构（参数、前后置条件、版本）
+  - [ ] SubTask 1.3: 输出契约文档并在仓库内存档
+- [ ] Task 2: 后端骨架（Spring Boot）
+  - [ ] SubTask 2.1: 创建多模块项目：core-domain、api-rest、worker、storage
+  - [ ] SubTask 2.2: 引入数据访问（JPA 或 JDBC）与基础配置（多环境）
+  - [ ] SubTask 2.3: 提供基础健康检查与配置校验端点
+- [ ] Task 3: 数据模型与持久化
+  - [ ] SubTask 3.1: 建模 Device、CommandTemplate、CommandInstance、Task、RunLog、RiskPolicy
+  - [ ] SubTask 3.2: 建模 User、Role、Permission（RBAC）与审计日志
+  - [ ] SubTask 3.3: 设计索引与归档策略（日志与截图元数据）
+- [ ] Task 4: 基本 API 与设备集成
+  - [ ] SubTask 4.1: 设备注册/心跳、能力上报、状态查询
+  - [ ] SubTask 4.2: 任务创建、命令队列生成、下发
+  - [ ] SubTask 4.3: 结果回传、状态流记录、失败原因标准化
+- [ ] Task 5: 调度、并发与重试
+  - [ ] SubTask 5.1: 简单调度器（定时/批量），并发限制（设备/分组级）
+  - [ ] SubTask 5.2: 重试策略与回滚（幂等键、最大次数、退避）
+  - [ ] SubTask 5.3: 任务生命周期管理（创建/运行中/成功/失败/终止）
+- [ ] Task 6: 风控与反检测最小实现
+  - [ ] SubTask 6.1: 速率限制（设备/分组/任务级）
+  - [ ] SubTask 6.2: 随机延迟与顺序扰动、夜间/节假日策略
+  - [ ] SubTask 6.3: 黑白名单与自动隔离（异常频度阈值）
+- [ ] Task 7: 前端骨架（Vue3）
+  - [ ] SubTask 7.1: 初始化项目（Vite、Router、Pinia）
+  - [ ] SubTask 7.2: 设备页（列表、分组、状态）、任务页（创建/查看）
+  - [ ] SubTask 7.3: 模板库页（签到/领奖）、日志页（检索/详情）
+- [ ] Task 8: 人工干预能力
+  - [ ] SubTask 8.1: 暂停/继续/重试/终止操作 API 与前端按钮
+  - [ ] SubTask 8.2: 改参与重新下发、单设备或分组选择
+  - [ ] SubTask 8.3: 权限控制与操作审计展示
+- [ ] Task 9: 实时/准实时状态展示（最小可用）
+  - [ ] SubTask 9.1: 轮询接口与增量刷新（默认）
+  - [ ] SubTask 9.2: 预留 WebSocket 增强点（可选开关）
+  - [ ] SubTask 9.3: 异常告警与看板（简版）
+- [ ] Task 10: 场景模板与校验
+  - [ ] SubTask 10.1: 常用 App 签到模板（含参数与前置校验）
+  - [ ] SubTask 10.2: 任务领奖模板（跨页/跨 App）
+  - [ ] SubTask 10.3: 模板版本管理与兼容性检查
+- [ ] Task 11: 测试与验收
+  - [ ] SubTask 11.1: 后端单元/集成测试（API、调度、风控）
+  - [ ] SubTask 11.2: 前端基础测试与手工验收用例
+  - [ ] SubTask 11.3: 试运行多设备，验证不可被检测异常的策略组合
+
+# 新增任务
+- [ ] Task 12: 通信层实现与降级
+  - [ ] SubTask 12.1: 设备端实现 WebSocket/MQTT 远程命令监听器（含重连与鉴权）
+  - [ ] SubTask 12.2: 服务端消息路由与会话管理，HTTP 长轮询作为降级
+  - [ ] SubTask 12.3: 压测并发连接与消息丢失/重试策略
+- [ ] Task 13: 设备心跳扩展与能力集上报
+  - [ ] SubTask 13.1: 上报前台包名、电量、网络类型、是否充电、Shizuku 可用性
+  - [ ] SubTask 13.2: 上报支持的原子命令能力列表（含版本）
+  - [ ] SubTask 13.3: 服务端兼容性匹配与调度决策优化
+- [ ] Task 14: 视觉原子命令与前置探测
+  - [ ] SubTask 14.1: find_and_tap / wait_for_element / assert_screen / check_screen 实现与契约
+  - [ ] SubTask 14.2: 探测流程与入口特征比对、失败回退与延后策略
+  - [ ] SubTask 14.3: 金丝雀选择策略与结果评估（覆盖品牌/系统/App 版本）
+- [ ] Task 15: 模板录制与可视化调试
+  - [ ] SubTask 15.1: 录制操作生成 JSON DSL（支持编辑与版本管理）
+  - [ ] SubTask 15.2: 截图流低频刷新、断点单步执行与在线改参
+  - [ ] SubTask 15.3: 模板成功率热力图与兼容性维度统计
+- [ ] Task 16: 安全与权限增强
+  - [ ] SubTask 16.1: 一机一号绑定约束与校验
+  - [ ] SubTask 16.2: 命令 HMAC 签名与设备端校验
+  - [ ] SubTask 16.3: 高风险操作二次确认与审计流水
+- [ ] Task 17: 根因归纳与建议自动化
+  - [ ] SubTask 17.1: 失败日志/截图聚类与原因分类（LLM 摘要）
+  - [ ] SubTask 17.2: 建议动作生成与置信度阈值自动执行
+  - [ ] SubTask 17.3: 运营回路：模板更新建议与版本分流
+-
+- [ ] Task 18: 管理端 AI 决策引擎集成
+  - [ ] SubTask 18.1: 选择与集成推理模型提供方（云/本地可插拔）
+  - [ ] SubTask 18.2: 决策输出结构定义（动作、理由、置信度、风险等级）
+  - [ ] SubTask 18.3: 与调度/风控/模板选择联动，审计记录与回放
+- [ ] Task 19: 设备端视觉理解模型集成
+  - [ ] SubTask 19.1: 集成图像理解模型（本地/边缘推理），定义场景快照结构
+  - [ ] SubTask 19.2: 视觉原子命令与识别结果对齐，提升定位鲁棒性
+  - [ ] SubTask 19.3: 上报频率控制与能耗治理（低频截图、必要时触发）
+- [ ] Task 20: 人工介入申请与审批流
+  - [ ] SubTask 20.1: 管理端 AI 触发人工介入的条件与阈值配置
+  - [ ] SubTask 20.2: 审批队列与通知（Web/邮件/IM），同意/驳回/改参流程
+  - [ ] SubTask 20.3: 审批结果回灌至执行与审计，闭环验证
+-
+- [ ] Task 21: 意图契约与边缘规划引擎
+  - [ ] SubTask 21.1: 意图契约解析与校验（constraints/successCriteria/observability/safetyRails）
+  - [ ] SubTask 21.2: 设备端执行计划摘要生成与审批握手（confidence/estimateMs）
+  - [ ] SubTask 21.3: 双轨选择器：按风险与场景在“原子序列/意图驱动”间切换，含兜底与回退
+- [ ] Task 22: 非阻塞人机协作与调试沙箱
+  - [ ] SubTask 22.1: 注视与建议UI与后端建议生成（2-3备选，含理由与置信度）
+  - [ ] SubTask 22.2: 调试沙箱回放（截图流、日志），断点单步与即改即测
+  - [ ] SubTask 22.3: 一键更新模板/意图并记录审计证据
+- [ ] Task 23: 行为画像与群体关系模拟
+  - [ ] SubTask 23.1: 个体行为指纹采集（热力点击、曲率、思考时间分布、解锁习惯）
+  - [ ] SubTask 23.2: 画像驱动节奏参数下发（个性化随机化）
+  - [ ] SubTask 23.3: 群体关系调度策略（非同步轻耦合联动）与效果观测
+- [ ] Task 24: 自然语言生成模板与分层看板
+  - [ ] SubTask 24.1: LLM解析自然语言为初始DSL模板，支持编辑与校验
+  - [ ] SubTask 24.2: 运维/风控/业务分层看板与指标映射
+  - [ ] SubTask 24.3: 模板成功率热力图与画像维度叠加分析
+# Task Dependencies
+- Task 2 depends on Task 1
+- Task 2 depends on Task 1
+- Task 2 depends on Task 1
+- Task 3 depends on Task 2
+- Task 4 depends on Task 3
+- Task 5 depends on Task 4
+- Task 6 depends on Task 5
+- Task 7 depends on Task 4
+- Task 8 depends on Task 4 and Task 7
+- Task 9 depends on Task 4 and Task 7
+- Task 10 depends on Task 4 and Task 6
+- Task 11 depends on Task 4, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10
+- Task 11 depends on Task 4, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10
+- Task 12 depends on Task 4
+- Task 13 depends on Task 4 and Task 12
+- Task 14 depends on Task 4 and Task 13
+- Task 15 depends on Task 4 and Task 14
+- Task 16 depends on Task 4
+- Task 17 depends on Task 11 and Task 14
+- Task 18 depends on Task 4 and Task 5
+- Task 19 depends on Task 4 and Task 14
+- Task 20 depends on Task 7 and Task 8
+- Task 21 depends on Task 4 and Task 14
+- Task 22 depends on Task 7 and Task 8
+- Task 23 depends on Task 11 and Task 6
+- Task 24 depends on Task 7 and Task 10
+
+# MVP 阶段标注
+- Phase 1（可靠与透明）：Task 4、Task 11、Task 12、Task 13（基础心跳与契约）、Task 14（视觉原子命令）
+- Phase 2（协作与学习）：Task 18（管理端AI）、Task 19（设备端视觉模型增强）、Task 21（意图契约与边缘规划）、Task 22（协作与沙箱）
+- Phase 3（生态与智能编排）：Task 23（画像与群体关系）、Task 24（自然语言模板与分层看板）

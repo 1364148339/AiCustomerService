@@ -1,0 +1,32 @@
+package com.aimacrodroid.service;
+
+import com.aimacrodroid.domain.dto.DeviceHeartbeatReqDTO;
+import com.aimacrodroid.domain.dto.DeviceRegisterReqDTO;
+import com.aimacrodroid.domain.entity.Device;
+import com.aimacrodroid.domain.vo.DeviceReadinessVO;
+import com.aimacrodroid.domain.vo.DeviceRegisterVO;
+import com.aimacrodroid.domain.vo.DeviceStatusVO;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+public interface DeviceService extends IService<Device> {
+
+    /**
+     * 设备注册
+     */
+    DeviceRegisterVO register(DeviceRegisterReqDTO req);
+
+    /**
+     * 设备心跳上报
+     */
+    void heartbeat(DeviceHeartbeatReqDTO req);
+
+    /**
+     * 获取设备状态
+     */
+    DeviceStatusVO getDeviceStatus(String deviceId);
+
+    /**
+     * 获取设备就绪状态
+     */
+    DeviceReadinessVO getDeviceReadiness(String deviceId);
+}
