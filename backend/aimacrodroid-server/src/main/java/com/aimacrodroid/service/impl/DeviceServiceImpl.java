@@ -1,14 +1,23 @@
 package com.aimacrodroid.service.impl;
 
+import com.aimacrodroid.common.exception.BizException;
 import com.aimacrodroid.domain.dto.DeviceHeartbeatReqDTO;
 import com.aimacrodroid.domain.dto.DeviceRegisterReqDTO;
 import com.aimacrodroid.domain.entity.Device;
 import com.aimacrodroid.domain.entity.DeviceReadiness;
+import com.aimacrodroid.domain.entity.StepInstance;
+import com.aimacrodroid.domain.entity.Task;
+import com.aimacrodroid.domain.entity.TaskDeviceRun;
 import com.aimacrodroid.domain.vo.DeviceReadinessVO;
 import com.aimacrodroid.domain.vo.DeviceRegisterVO;
 import com.aimacrodroid.domain.vo.DeviceStatusVO;
+import com.aimacrodroid.domain.vo.DeviceTaskVO;
 import com.aimacrodroid.mapper.DeviceMapper;
-import com.aimacrodroid.service.DeviceReadinessService;
+import com.aimacrodroid.mapper.DeviceReadinessMapper;
+import com.aimacrodroid.mapper.StepInstanceMapper;
+import com.aimacrodroid.mapper.TaskDeviceRunMapper;
+import com.aimacrodroid.mapper.TaskMapper;
+import com.aimacrodroid.service.AuditLogService;
 import com.aimacrodroid.service.DeviceService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -18,127 +27,62 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> implements DeviceService {
 
-    private final DeviceReadinessService deviceReadinessService;
+    private final DeviceReadinessMapper deviceReadinessMapper;
+    private final TaskDeviceRunMapper taskDeviceRunMapper;
+    private final TaskMapper taskMapper;
+    private final StepInstanceMapper stepInstanceMapper;
+    private final AuditLogService auditLogService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public DeviceRegisterVO register(DeviceRegisterReqDTO req) {
-        // 1. 查询设备是否已存在
-        LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Device::getDeviceId, req.getDeviceId());
-        Device existingDevice = this.getOne(queryWrapper);
-
-        String token;
+        Device existingDevice = getByDeviceCode(req.getDeviceId());
+        String token = UUID.randomUUID().toString().replace("-", "");
+        String tokenHash = sha256(token);
+        token = tokenHash;
+        Device current;
         if (existingDevice == null) {
-            // 2. 不存在则创建新设备
-            Device newDevice = new Device();
-            newDevice.setDeviceId(req.getDeviceId());
-            newDevice.setBrand(req.getBrand());
-            newDevice.setModel(req.getModel());
-            newDevice.setAndroidVersion(req.getAndroidVersion());
-            newDevice.setResolution(req.getResolution());
-            newDevice.setShizukuAvailable(req.getShizukuAvailable());
-            newDevice.setOverlayGranted(req.getOverlayGranted());
-            newDevice.setKeyboardEnabled(req.getKeyboardEnabled());
-            newDevice.setSseSupported(req.getSseSupported());
-            newDevice.setCapabilities(req.getCapabilities());
-            newDevice.setStatus("ONLINE");
-
-            // 生成鉴权 Token
-            token = UUID.randomUUID().toString().replace("-", "");
-            newDevice.setToken(token);
-
-            this.save(newDevice);
-            @Override
-    public DeviceStatusVO getDeviceStatus(String deviceId) {
-        LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Device::getDeviceId, deviceId);
-        Device device = this.getOne(queryWrapper);
-        
-        if (device == null) {
-            throw new RuntimeException("设备不存在");
+            current = new Device();
+            current.setDeviceId(req.getDeviceId());
+            current.setBrand(req.getBrand());
+            current.setModel(req.getModel());
+            current.setAndroidVersion(req.getAndroidVersion());
+            current.setResolution(req.getResolution());
+            current.setCapabilities(normalizeCapabilitiesForStorage(req.getCapabilities()));
+            current.setStatus("ONLINE");
+            current.setToken(tokenHash);
+            current.setLastHeartbeatTime(LocalDateTime.now());
+            this.save(current);
+            current = getByDeviceCode(req.getDeviceId());
+        } else {
+            current = existingDevice;
+            current.setBrand(req.getBrand());
+            current.setModel(req.getModel());
+            current.setAndroidVersion(req.getAndroidVersion());
+            current.setResolution(req.getResolution());
+            current.setCapabilities(normalizeCapabilitiesForStorage(req.getCapabilities()));
+            current.setStatus("ONLINE");
+            current.setToken(tokenHash);
+            current.setLastHeartbeatTime(LocalDateTime.now());
+            this.updateById(current);
         }
-
-        // 判断设备是否离线 (例如心跳超过 3 分钟未上报)
-        String status = device.getStatus();
-        if ("ONLINE".equals(status) && device.getLastHeartbeatTime() != null) {
-            if (device.getLastHeartbeatTime().plusMinutes(3).isBefore(LocalDateTime.now())) {
-                status = "OFFLINE";
-                device.setStatus("OFFLINE");
-                this.updateById(device); // 懒更新状态
-            }
-        }
-
-        return DeviceStatusVO.builder()
-                .status(status)
-                .lastHeartbeatTime(device.getLastHeartbeatTime())
-                .foregroundPkg(device.getForegroundPkg())
-                .capabilities(device.getCapabilities())
-                .shizukuAvailable(device.getShizukuAvailable())
-                .overlayGranted(device.getOverlayGranted())
-                .keyboardEnabled(device.getKeyboardEnabled())
-                .build();
-    }
-
-    @Override
-    public DeviceReadinessVO getDeviceReadiness(String deviceId) {
-        LambdaQueryWrapper<DeviceReadiness> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(DeviceReadiness::getDeviceId, deviceId)
-                .orderByDesc(DeviceReadiness::getGmtCreate)
-                .last("LIMIT 1");
-        
-        DeviceReadiness readiness = deviceReadinessService.getOne(queryWrapper);
-        if (readiness == null) {
-            // 如果没有流水，降级返回设备主表中的当前状态
-            LambdaQueryWrapper<Device> dQuery = new LambdaQueryWrapper<>();
-            dQuery.eq(Device::getDeviceId, deviceId);
-            Device device = this.getOne(dQuery);
-            if (device == null) {
-                throw new RuntimeException("设备不存在");
-            }
-            return DeviceReadinessVO.builder()
-                    .shizukuRunning(device.getShizukuAvailable())
-                    .overlayGranted(device.getOverlayGranted())
-                    .keyboardEnabled(device.getKeyboardEnabled())
-                    .lastActivationMethod("unknown")
-                    .build();
-        }
-
-        return DeviceReadinessVO.builder()
-                .shizukuRunning(readiness.getShizukuRunning())
-                .overlayGranted(readiness.getOverlayGranted())
-                .keyboardEnabled(readiness.getKeyboardEnabled())
-                .lastActivationMethod(readiness.getLastActivationMethod())
-                .build();
-    }
-
-} else {
-            // 3. 存在则更新设备信息和状态
-            existingDevice.setBrand(req.getBrand());
-            existingDevice.setModel(req.getModel());
-            existingDevice.setAndroidVersion(req.getAndroidVersion());
-            existingDevice.setResolution(req.getResolution());
-            existingDevice.setShizukuAvailable(req.getShizukuAvailable());
-            existingDevice.setOverlayGranted(req.getOverlayGranted());
-            existingDevice.setKeyboardEnabled(req.getKeyboardEnabled());
-            existingDevice.setSseSupported(req.getSseSupported());
-            existingDevice.setCapabilities(req.getCapabilities());
-            existingDevice.setStatus("ONLINE");
-            
-            // 可以选择重新生成 Token，或者复用旧 Token。Phase 1 先复用。
-            token = existingDevice.getToken();
-
-            this.updateById(existingDevice);
-        }
-
+        upsertReadiness(current.getId(), req.getShizukuAvailable(), req.getOverlayGranted(), req.getKeyboardEnabled(), req.getSseSupported(), null, null, null, null);
+        auditLogService.record(req.getDeviceId(), "DEVICE_REGISTER", "DEVICE", req.getDeviceId(), "SUCCESS", new HashMap<>());
         return DeviceRegisterVO.builder()
                 .registered(true)
                 .token(token)
@@ -148,120 +92,242 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void heartbeat(DeviceHeartbeatReqDTO req) {
-        LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Device::getDeviceId, req.getDeviceId());
-        Device device = this.getOne(queryWrapper);
-
+        Device device = getByDeviceCode(req.getDeviceId());
         if (device == null) {
             log.warn("收到未注册设备的心跳，deviceId: {}", req.getDeviceId());
-            throw new RuntimeException("设备未注册");
+            throw new BizException("DEVICE_NOT_FOUND", "设备未注册");
         }
-
-        // 记录就绪状态变更流水
-        checkAndRecordReadinessChange(device, req);
-
-        // 更新设备心跳及状态信息
-        device.setForegroundPkg(req.getForegroundPkg());
-        device.setBatteryPct(req.getBatteryPct());
-        device.setNetworkType(req.getNetworkType());
-        device.setIsCharging(req.getCharging() != null ? req.getCharging() : 0);
-        if (req.getShizukuAvailable() != null) device.setShizukuAvailable(req.getShizukuAvailable());
-        if (req.getOverlayGranted() != null) device.setOverlayGranted(req.getOverlayGranted());
-        if (req.getKeyboardEnabled() != null) device.setKeyboardEnabled(req.getKeyboardEnabled());
-        if (req.getSseSupported() != null) device.setSseSupported(req.getSseSupported());
-        if (req.getCapabilities() != null) device.setCapabilities(req.getCapabilities());
-        
+        if (req.getCapabilities() != null) {
+            device.setCapabilities(normalizeCapabilitiesForStorage(req.getCapabilities()));
+        }
         device.setLastHeartbeatTime(LocalDateTime.now());
         device.setStatus("ONLINE");
-
         this.updateById(device);
-    }
-
-    private void checkAndRecordReadinessChange(Device oldDevice, DeviceHeartbeatReqDTO req) {
-        boolean changed = false;
-        
-        Integer newShizuku = req.getShizukuAvailable() != null ? req.getShizukuAvailable() : oldDevice.getShizukuAvailable();
-        Integer newOverlay = req.getOverlayGranted() != null ? req.getOverlayGranted() : oldDevice.getOverlayGranted();
-        Integer newKeyboard = req.getKeyboardEnabled() != null ? req.getKeyboardEnabled() : oldDevice.getKeyboardEnabled();
-
-        if (!Objects.equals(oldDevice.getShizukuAvailable(), newShizuku) ||
-            !Objects.equals(oldDevice.getOverlayGranted(), newOverlay) ||
-            !Objects.equals(oldDevice.getKeyboardEnabled(), newKeyboard)) {
-            changed = true;
-        }
-
-        if (changed) {
-            DeviceReadiness readiness = new DeviceReadiness();
-            readiness.setDeviceId(oldDevice.getDeviceId());
-            readiness.setShizukuRunning(newShizuku);
-            readiness.setOverlayGranted(newOverlay);
-            readiness.setKeyboardEnabled(newKeyboard);
-            readiness.setChangeReason("Heartbeat status change");
-            deviceReadinessService.save(readiness);
-            log.info("设备[{}]就绪状态发生变更, 记录流水", oldDevice.getDeviceId());
-        }
+        upsertReadiness(device.getId(), req.getShizukuAvailable(), req.getOverlayGranted(), req.getKeyboardEnabled(), req.getSseSupported(),
+                req.getForegroundPkg(), req.getBatteryPct(), req.getNetworkType(), req.getCharging());
+        auditLogService.record(req.getDeviceId(), "DEVICE_HEARTBEAT", "DEVICE", req.getDeviceId(), "SUCCESS", new HashMap<>());
     }
 
     @Override
     public DeviceStatusVO getDeviceStatus(String deviceId) {
-        LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Device::getDeviceId, deviceId);
-        Device device = this.getOne(queryWrapper);
-        
+        Device device = getByDeviceCode(deviceId);
         if (device == null) {
-            throw new RuntimeException("设备不存在");
+            throw new BizException("DEVICE_NOT_FOUND", "设备不存在");
         }
-
-        // 判断设备是否离线 (例如心跳超过 3 分钟未上报)
         String status = device.getStatus();
-        if ("ONLINE".equals(status) && device.getLastHeartbeatTime() != null) {
-            if (device.getLastHeartbeatTime().plusMinutes(3).isBefore(LocalDateTime.now())) {
-                status = "OFFLINE";
-                device.setStatus("OFFLINE");
-                this.updateById(device); // 懒更新状态
-            }
+        if ("ONLINE".equals(status) && device.getLastHeartbeatTime() != null && device.getLastHeartbeatTime().plusMinutes(3).isBefore(LocalDateTime.now())) {
+            status = "OFFLINE";
+            device.setStatus("OFFLINE");
+            this.updateById(device);
         }
-
+        DeviceReadiness readiness = getLatestReadiness(device.getId());
         return DeviceStatusVO.builder()
                 .status(status)
                 .lastHeartbeatTime(device.getLastHeartbeatTime())
-                .foregroundPkg(device.getForegroundPkg())
+                .foregroundPkg(readiness == null ? null : readiness.getForegroundPkg())
                 .capabilities(device.getCapabilities())
-                .shizukuAvailable(device.getShizukuAvailable())
-                .overlayGranted(device.getOverlayGranted())
-                .keyboardEnabled(device.getKeyboardEnabled())
+                .shizukuAvailable(readiness == null ? 0 : readiness.getShizukuRunning())
+                .overlayGranted(readiness == null ? 0 : readiness.getOverlayGranted())
+                .keyboardEnabled(readiness == null ? 0 : readiness.getKeyboardEnabled())
                 .build();
     }
 
     @Override
     public DeviceReadinessVO getDeviceReadiness(String deviceId) {
-        LambdaQueryWrapper<DeviceReadiness> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(DeviceReadiness::getDeviceId, deviceId)
-                .orderByDesc(DeviceReadiness::getGmtCreate)
-                .last("LIMIT 1");
-        
-        DeviceReadiness readiness = deviceReadinessService.getOne(queryWrapper);
+        Device device = getByDeviceCode(deviceId);
+        if (device == null) {
+            throw new BizException("DEVICE_NOT_FOUND", "设备不存在");
+        }
+        DeviceReadiness readiness = getLatestReadiness(device.getId());
         if (readiness == null) {
-            // 如果没有流水，降级返回设备主表中的当前状态
-            LambdaQueryWrapper<Device> dQuery = new LambdaQueryWrapper<>();
-            dQuery.eq(Device::getDeviceId, deviceId);
-            Device device = this.getOne(dQuery);
-            if (device == null) {
-                throw new RuntimeException("设备不存在");
-            }
             return DeviceReadinessVO.builder()
-                    .shizukuRunning(device.getShizukuAvailable())
-                    .overlayGranted(device.getOverlayGranted())
-                    .keyboardEnabled(device.getKeyboardEnabled())
+                    .shizukuRunning(0)
+                    .overlayGranted(0)
+                    .keyboardEnabled(0)
                     .lastActivationMethod("unknown")
                     .build();
         }
-
         return DeviceReadinessVO.builder()
                 .shizukuRunning(readiness.getShizukuRunning())
                 .overlayGranted(readiness.getOverlayGranted())
                 .keyboardEnabled(readiness.getKeyboardEnabled())
                 .lastActivationMethod(readiness.getLastActivationMethod())
                 .build();
+    }
+
+    @Override
+    public List<DeviceTaskVO> pullPendingTasks(String deviceId) {
+        Device device = getByDeviceCode(deviceId);
+        if (device == null) {
+            throw new BizException("DEVICE_NOT_FOUND", "设备不存在");
+        }
+        List<TaskDeviceRun> runs = queryDeviceRuns(device.getId(), "RUNNING");
+        if (runs.isEmpty()) {
+            runs = queryDeviceRuns(device.getId(), "PENDING");
+        }
+        if (runs.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Long> taskIds = runs.stream().map(TaskDeviceRun::getTaskId).distinct().collect(Collectors.toList());
+        LambdaQueryWrapper<Task> taskQuery = new LambdaQueryWrapper<>();
+        taskQuery.in(Task::getId, taskIds);
+        List<Task> tasks = taskMapper.selectList(taskQuery);
+        Map<Long, Task> taskMap = tasks.stream().collect(Collectors.toMap(Task::getId, t -> t));
+        LambdaQueryWrapper<StepInstance> stepQuery = new LambdaQueryWrapper<>();
+        stepQuery.in(StepInstance::getTaskId, taskIds).orderByAsc(StepInstance::getStepNo);
+        Map<Long, List<Map<String, Object>>> stepMap = stepInstanceMapper.selectList(stepQuery).stream()
+                .collect(Collectors.groupingBy(StepInstance::getTaskId, Collectors.mapping(this::toStepPayload, Collectors.toList())));
+        List<DeviceTaskVO> result = new ArrayList<>();
+        for (TaskDeviceRun run : runs) {
+            Task task = taskMap.get(run.getTaskId());
+            if (task == null) {
+                continue;
+            }
+            List<Map<String, Object>> steps = stepMap.get(task.getId());
+            result.add(DeviceTaskVO.builder()
+                    .id(String.valueOf(task.getId()))
+                    .scenarioKey(task.getScenarioKey())
+                    .scenarioName(task.getScenarioName())
+                    .track("atomic")
+                    .steps(steps)
+                    .commands(steps)
+                    .constraints(task.getConstraints())
+                    .observability(task.getObservability())
+                    .priority(task.getPriority() == null ? 0 : task.getPriority())
+                    .build());
+        }
+        result.sort(Comparator.comparingInt(DeviceTaskVO::getPriority).reversed().thenComparing(DeviceTaskVO::getId));
+        return result;
+    }
+
+    private List<TaskDeviceRun> queryDeviceRuns(Long devicePkId, String status) {
+        LambdaQueryWrapper<TaskDeviceRun> runQuery = new LambdaQueryWrapper<>();
+        runQuery.eq(TaskDeviceRun::getDeviceId, devicePkId)
+                .eq(TaskDeviceRun::getStatus, status)
+                .orderByAsc(TaskDeviceRun::getGmtCreate);
+        return taskDeviceRunMapper.selectList(runQuery);
+    }
+
+    private void upsertReadiness(Long devicePkId, Object shizuku, Object overlay, Object keyboard, Object sse, String foregroundPkg,
+                                 Integer batteryPct, String networkType, Object charging) {
+        LambdaQueryWrapper<DeviceReadiness> query = new LambdaQueryWrapper<>();
+        query.eq(DeviceReadiness::getDeviceId, devicePkId).last("LIMIT 1");
+        DeviceReadiness readiness = deviceReadinessMapper.selectOne(query);
+        if (readiness == null) {
+            readiness = new DeviceReadiness();
+            readiness.setDeviceId(devicePkId);
+        }
+        if (foregroundPkg != null) {
+            readiness.setForegroundPkg(foregroundPkg);
+        }
+        if (batteryPct != null) {
+            readiness.setBatteryPct(batteryPct);
+        }
+        if (networkType != null) {
+            readiness.setNetworkType(networkType);
+        }
+        if (charging != null) {
+            readiness.setIsCharging(toIntFlag(charging));
+        }
+        if (shizuku != null) {
+            readiness.setShizukuRunning(toIntFlag(shizuku));
+        }
+        if (overlay != null) {
+            readiness.setOverlayGranted(toIntFlag(overlay));
+        }
+        if (keyboard != null) {
+            readiness.setKeyboardEnabled(toIntFlag(keyboard));
+        }
+        if (sse != null) {
+            readiness.setSseSupported(toIntFlag(sse));
+        }
+        readiness.setHeartbeatAt(LocalDateTime.now());
+        if (readiness.getId() == null) {
+            deviceReadinessMapper.insert(readiness);
+        } else {
+            deviceReadinessMapper.updateById(readiness);
+        }
+    }
+
+    private Device getByDeviceCode(String deviceCode) {
+        LambdaQueryWrapper<Device> query = new LambdaQueryWrapper<>();
+        query.eq(Device::getDeviceId, deviceCode).last("LIMIT 1");
+        return this.getOne(query, false);
+    }
+
+    private DeviceReadiness getLatestReadiness(Long devicePkId) {
+        LambdaQueryWrapper<DeviceReadiness> query = new LambdaQueryWrapper<>();
+        query.eq(DeviceReadiness::getDeviceId, devicePkId).last("LIMIT 1");
+        return deviceReadinessMapper.selectOne(query);
+    }
+
+    private Integer toIntFlag(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        if (value instanceof Boolean) {
+            Boolean b = (Boolean) value;
+            return b ? 1 : 0;
+        }
+        if (value instanceof Number) {
+            Number n = (Number) value;
+            return n.intValue() == 0 ? 0 : 1;
+        }
+        if (value instanceof String) {
+            String s = (String) value;
+            String normalized = s.trim().toLowerCase();
+            if ("true".equals(normalized) || "1".equals(normalized) || "yes".equals(normalized)) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> normalizeCapabilitiesForStorage(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Map<?, ?>) {
+            Map<?, ?> mapValue = (Map<?, ?>) value;
+            return (Map<String, Object>) mapValue;
+        }
+        if (value instanceof List<?>) {
+            List<?> listValue = (List<?>) value;
+            Map<String, Object> wrapped = new HashMap<>();
+            wrapped.put("items", listValue);
+            return wrapped;
+        }
+        Map<String, Object> wrapped = new HashMap<>();
+        wrapped.put("value", value);
+        return wrapped;
+    }
+
+    private Map<String, Object> toStepPayload(StepInstance stepInstance) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("stepId", stepInstance.getId());
+        payload.put("stepNo", stepInstance.getStepNo());
+        payload.put("stepName", stepInstance.getStepName());
+        payload.put("actionCode", stepInstance.getActionCode());
+        payload.put("action", stepInstance.getActionCode());
+        payload.put("params", stepInstance.getActionParams());
+        payload.put("timeoutMs", stepInstance.getTimeoutMs());
+        payload.put("retryMax", stepInstance.getRetryMax());
+        payload.put("retryBackoffMs", stepInstance.getRetryBackoffMs());
+        return payload;
+    }
+
+    private String sha256(String value) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                sb.append(String.format(java.util.Locale.ROOT, "%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception ex) {
+            throw new BizException("INTERNAL_ERROR", "token摘要生成失败");
+        }
     }
 }

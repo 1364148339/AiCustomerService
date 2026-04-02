@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -14,7 +15,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName(value = "amd_snapshot", autoResultMap = true)
+@TableName(value = "t_snapshot", autoResultMap = true)
 public class Snapshot extends BaseEntity {
 
     /**
@@ -28,9 +29,9 @@ public class Snapshot extends BaseEntity {
     private Long taskId;
 
     /**
-     * 冗余查询字段: 设备标识
+     * 运行实例ID
      */
-    private String deviceId;
+    private Long runId;
 
     /**
      * 截图对象存储路径URL
@@ -45,11 +46,11 @@ public class Snapshot extends BaseEntity {
     /**
      * OCR/Accessibility树提取的结构化视图数据
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(value = "element_json", typeHandler = JacksonTypeHandler.class)
     private List<Map<String, Object>> elements;
 
     /**
      * 快照在设备端的生成时间戳
      */
-    private Long snapshotTimestamp;
+    private LocalDateTime capturedAt;
 }

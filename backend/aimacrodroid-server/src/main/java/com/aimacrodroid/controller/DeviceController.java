@@ -7,6 +7,7 @@ import com.aimacrodroid.domain.entity.Device;
 import com.aimacrodroid.domain.vo.DeviceReadinessVO;
 import com.aimacrodroid.domain.vo.DeviceRegisterVO;
 import com.aimacrodroid.domain.vo.DeviceStatusVO;
+import com.aimacrodroid.domain.vo.DeviceTaskVO;
 import com.aimacrodroid.service.DeviceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -47,6 +48,12 @@ public class DeviceController {
     @GetMapping("/{id}/readiness")
     public Result<DeviceReadinessVO> getReadiness(@PathVariable("id") String deviceId) {
         return Result.success(deviceService.getDeviceReadiness(deviceId));
+    }
+
+    @Operation(summary = "拉取设备待执行任务", description = "设备轮询拉取分配给本机的待执行任务")
+    @GetMapping("/{id}/tasks")
+    public Result<List<DeviceTaskVO>> pullTasks(@PathVariable("id") String deviceId) {
+        return Result.success(deviceService.pullPendingTasks(deviceId));
     }
 
     @Operation(summary = "获取所有设备列表", description = "获取当前所有已注册的设备")

@@ -1,34 +1,38 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { getDevices, getTasks } from '../mock/api'
-import { useAppStore } from '../stores/app'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { useDevicesStore } from '../stores/devices'
 
-const appStore = useAppStore()
-const devices = ref([])
-const loading = ref(false)
-let timer = null
+const devicesStore = useDevicesStore()
 
-async function loadDevices() {
-  loading.value = true
+const devices = computed(() => devicesStore.filteredList)
+const loading = computed(() => devicesStore.loading)
+const filters = computed(() => devicesStore.filters)
+
+function readinessType(flag) {
+  return flag ? 'success' : 'danger'
+}
+
+function readinessText(flag) {
+  return flag ? '就绪' : '未就绪'
+}
+
+async function sendReadinessHint(deviceId) {
   try {
-    const [deviceList, taskList] = await Promise.all([getDevices(), getTasks()])
-    devices.value = deviceList
-    appStore.setOverview({
-      onlineCount: deviceList.filter((item) => item.online).length,
-      runningCount: taskList.filter((item) => item.status === 'RUNNING').length
-    })
-  } finally {
-    loading.value = false
+    await devicesStore.dispatchReadinessHint(deviceId)
+    ElMessage.success(`已为 ${deviceId} 下发提示任务`)
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '下发提示任务失败')
   }
 }
 
-onMounted(() => {
-  loadDevices()
-  timer = setInterval(loadDevices, 3000)
+onMounted(async () => {
+  await devicesStore.refresh()
+  devicesStore.startPolling()
 })
 
 onBeforeUnmount(() => {
-  clearInterval(timer)
+  devicesStore.stopPolling()
 })
 </script>
 
@@ -37,63 +41,85 @@ onBeforeUnmount(() => {
     <el-card shadow="never">
       <template #header>
         <div class="section-head">
-          <span>设备状态</span>
-          <el-button @click="loadDevices" :loading="loading" type="primary" plain>
+          <span>设备状态与就绪度</span>
+          <el-button @click="devicesStore.refresh" :loading="loading" type="primary">
             手动刷新
           </el-button>
         </div>
       </template>
 
-      <el-table :data="devices" v-loading="loading" border style="width: 100%">
-        <el-table-column label="设备" min-width="180">
+      <el-form :inline="true" :model="filters" class="filter-bar">
+        <el-form-item label="关键字">
+          <el-input v-model="filters.keyword" placeholder="设备ID/机型/前台包名" clearable style="width: 260px" />
+        </el-form-item>
+        <el-form-item label="在线状态">
+          <el-select v-model="filters.online" style="width: 140px">
+            <el-option label="全部" value="ALL" />
+            <el-option label="在线" value="ONLINE" />
+            <el-option label="离线" value="OFFLINE" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="品牌">
+          <el-input v-model="filters.brand" placeholder="如 Xiaomi" clearable style="width: 180px" />
+        </el-form-item>
+      </el-form>
+
+      <el-table :data="devices" v-loading="loading" border>
+        <el-table-column label="设备" min-width="240">
           <template #default="{ row }">
-            <div>{{ row.id }}</div>
-            <div class="text-sm text-secondary">{{ row.brand }} {{ row.model }}</div>
+            <div class="device-id">{{ row.id }}</div>
+            <div class="sub-text">
+              {{ row.brand }} {{ row.model }} · Android {{ row.androidVersion }} · {{ row.resolution }}
+            </div>
+            <div class="sub-text">最近心跳：{{ new Date(row.lastHeartbeat).toLocaleString() }}</div>
           </template>
         </el-table-column>
-        
-        <el-table-column label="在线" width="100" align="center">
+
+        <el-table-column label="状态" width="108" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.online ? 'success' : 'danger'" effect="dark">
+            <el-tag :type="row.online ? 'success' : 'info'" effect="dark">
               {{ row.online ? '在线' : '离线' }}
             </el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column prop="foregroundPkg" label="前台包名" min-width="200">
+        <el-table-column label="运行环境" min-width="220">
           <template #default="{ row }">
-            {{ row.foregroundPkg || '--' }}
+            <div>前台包名：{{ row.foregroundPkg || '--' }}</div>
+            <div class="sub-text">网络：{{ row.networkType }} · SSE：{{ row.sseSupported ? '支持' : '不支持' }}</div>
+            <div class="sub-text">电量：{{ row.batteryPct }}% · 充电：{{ row.charging ? '是' : '否' }}</div>
           </template>
         </el-table-column>
 
-        <el-table-column label="电量/网络" width="150">
+        <el-table-column label="就绪徽标" min-width="260">
           <template #default="{ row }">
-            <div>{{ row.batteryPct }}% <el-icon v-if="row.charging"><i-ep-lightning /></el-icon></div>
-            <div class="text-sm text-secondary">{{ row.networkType }}</div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="就绪状态" min-width="220">
-          <template #default="{ row }">
-            <el-tag :type="row.shizukuAvailable ? 'success' : 'warning'" size="small" class="mr-2 mb-1">
-              Shizuku
-            </el-tag>
-            <el-tag :type="row.overlayGranted ? 'success' : 'warning'" size="small" class="mr-2 mb-1">
-              悬浮窗
-            </el-tag>
-            <el-tag :type="row.keyboardEnabled ? 'success' : 'warning'" size="small" class="mb-1">
-              键盘
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="能力集" min-width="200">
-          <template #default="{ row }">
-            <div class="flex flex-wrap gap-1">
-              <el-tag v-for="cap in row.capabilities" :key="cap" type="info" size="small">
-                {{ cap }}
-              </el-tag>
+            <div class="badge-row">
+              <el-tag :type="readinessType(row.shizukuAvailable)" size="small">Shizuku {{ readinessText(row.shizukuAvailable) }}</el-tag>
+              <el-tag :type="readinessType(row.overlayGranted)" size="small">悬浮窗 {{ readinessText(row.overlayGranted) }}</el-tag>
+              <el-tag :type="readinessType(row.keyboardEnabled)" size="small">键盘 {{ readinessText(row.keyboardEnabled) }}</el-tag>
             </div>
+            <div class="sub-text">激活方式：{{ row.lastActivationMethod }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="能力集" min-width="210">
+          <template #default="{ row }">
+            <div class="badge-row">
+              <el-tag v-for="cap in row.capabilities" :key="cap" type="info" size="small">{{ cap }}</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="160" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              type="warning"
+              link
+              :disabled="row.shizukuAvailable && row.overlayGranted && row.keyboardEnabled"
+              @click="sendReadinessHint(row.id)"
+            >
+              下发提示任务
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -107,25 +133,20 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
 }
-.text-sm {
-  font-size: 12px;
+.device-id {
+  font-weight: 600;
 }
-.text-secondary {
+.filter-bar {
+  margin-bottom: 10px;
+}
+.sub-text {
+  margin-top: 4px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
-.mr-2 {
-  margin-right: 8px;
-}
-.mb-1 {
-  margin-bottom: 4px;
-}
-.flex {
+.badge-row {
   display: flex;
-}
-.flex-wrap {
   flex-wrap: wrap;
-}
-.gap-1 {
-  gap: 4px;
+  gap: 6px;
 }
 </style>

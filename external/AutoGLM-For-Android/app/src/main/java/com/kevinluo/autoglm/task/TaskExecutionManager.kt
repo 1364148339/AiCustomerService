@@ -168,6 +168,10 @@ object TaskExecutionManager : PhoneAgentListener {
                             status = TaskStatus.COMPLETED,
                             resultMessage = result.message,
                         )
+                    taskId?.let {
+                        _taskEvents.tryEmit(TaskEvent(it, TaskEventType.COMPLETED, data = result.message))
+                    }
+                    FloatingWindowStateManager.onTaskCompleted()
                 } else {
                     Logger.w(TAG, "Task failed: ${result.message}")
                     _taskState.value =
@@ -175,6 +179,10 @@ object TaskExecutionManager : PhoneAgentListener {
                             status = TaskStatus.FAILED,
                             resultMessage = result.message,
                         )
+                    taskId?.let {
+                        _taskEvents.tryEmit(TaskEvent(it, TaskEventType.FAILED, data = result.message))
+                    }
+                    FloatingWindowStateManager.onTaskCompleted()
                 }
             } catch (e: Exception) {
                 Logger.e(TAG, "Task error: ${e.message}", e)
@@ -183,6 +191,10 @@ object TaskExecutionManager : PhoneAgentListener {
                         status = TaskStatus.FAILED,
                         resultMessage = e.message ?: "Unknown error",
                     )
+                taskId?.let {
+                    _taskEvents.tryEmit(TaskEvent(it, TaskEventType.FAILED, data = e.message ?: "Unknown error"))
+                }
+                FloatingWindowStateManager.onTaskCompleted()
             }
         }
 

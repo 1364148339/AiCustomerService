@@ -1,13 +1,15 @@
 <script setup>
 import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useAppStore } from './stores/app'
 
 const route = useRoute()
-const router = useRouter()
 const appStore = useAppStore()
 
-const activeMenu = computed(() => route.path)
+const activeMenu = computed(() => {
+  if (route.path.startsWith('/tasks')) return '/tasks'
+  return route.path
+})
 </script>
 
 <template>
@@ -22,14 +24,14 @@ const activeMenu = computed(() => route.path)
         class="el-menu-vertical"
         router
       >
-        <el-menu-item index="/">
-          <span>概览</span>
-        </el-menu-item>
         <el-menu-item index="/devices">
           <span>设备</span>
         </el-menu-item>
-        <el-menu-item index="/tasks/new">
-          <span>新建任务</span>
+        <el-menu-item index="/scenarios">
+          <span>场景</span>
+        </el-menu-item>
+        <el-menu-item index="/tasks">
+          <span>任务列表</span>
         </el-menu-item>
         <el-menu-item index="/logs">
           <span>日志</span>

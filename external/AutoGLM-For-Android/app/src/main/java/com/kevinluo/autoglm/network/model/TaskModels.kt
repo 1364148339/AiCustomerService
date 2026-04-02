@@ -22,7 +22,7 @@ data class TaskDto(
 
 @Serializable
 data class EventReq(
-    val taskId: String,
+    val taskId: Long,
     val commandId: String? = null,
     val status: String, // RUNNING, SUCCESS, FAIL
     val timestamp: Long,
@@ -34,9 +34,4 @@ data class EventReq(
     val sensitiveScreenDetected: Boolean = false,
     val progress: JsonObject? = null,
     val hmac: String? = null
-)
-
-@Serializable
-data class EventResp(
-    val ok: Boolean
 )

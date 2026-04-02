@@ -4,9 +4,9 @@ import com.aimacrodroid.common.api.Result;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.BindException;
 import org.springframework.validation.BindingResult;
-import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 
 /**
  * 全局异常处理
@@ -15,10 +15,20 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(value = BizException.class)
+    public Result<?> handleBizException(BizException e) {
+        return Result.failed(e.getCode(), e.getMessage());
+    }
+
+    @ExceptionHandler(value = IllegalArgumentException.class)
+    public Result<?> handleIllegalArgumentException(IllegalArgumentException e) {
+        return Result.failed("INVALID_PARAM", e.getMessage());
+    }
+
     @ExceptionHandler(value = Exception.class)
     public Result<?> handle(Exception e) {
         log.error("系统内部异常: ", e);
-        return Result.failed("系统内部异常，请联系管理员");
+        return Result.failed("INTERNAL_ERROR", "系统内部异常，请联系管理员");
     }
 
     @ExceptionHandler(value = MethodArgumentNotValidException.class)
@@ -28,7 +38,7 @@ public class GlobalExceptionHandler {
         if (bindingResult.hasErrors()) {
             message = bindingResult.getAllErrors().get(0).getDefaultMessage();
         }
-        return Result.failed(400, message != null ? message : "参数校验失败");
+        return Result.failed("INVALID_PARAM", message != null ? message : "参数校验失败");
     }
 
     @ExceptionHandler(value = BindException.class)
@@ -38,6 +48,6 @@ public class GlobalExceptionHandler {
         if (bindingResult.hasErrors()) {
             message = bindingResult.getAllErrors().get(0).getDefaultMessage();
         }
-        return Result.failed(400, message != null ? message : "参数绑定失败");
+        return Result.failed("INVALID_PARAM", message != null ? message : "参数绑定失败");
     }
 }

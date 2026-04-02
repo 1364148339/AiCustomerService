@@ -9,9 +9,9 @@ spring:
   datasource:
     type: com.alibaba.druid.pool.DruidDataSource
     driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://121.43.138.5:5432/ai_macrodroid?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
-    username: postgres
-    password: jxxd1234*1234
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ai_macrodroid}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
     druid:
       initial-size: 5
       min-idle: 5
@@ -55,3 +55,19 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
     operationsSorter: method
+
+task:
+  dispatch:
+    device-concurrency: 1
+    batch-size: 100
+    poll-interval-ms: 1000
+  step:
+    default-timeout-ms: 5000
+    max-retry-default: 1
+
+security:
+  hmac:
+    window-seconds: 300
+
+storage:
+  snapshot-url-expire-seconds: 3600

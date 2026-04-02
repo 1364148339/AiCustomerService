@@ -1,14 +1,22 @@
 package com.aimacrodroid.service.impl;
 
+import com.aimacrodroid.common.exception.BizException;
 import com.aimacrodroid.domain.dto.TaskCreateReqDTO;
-import com.aimacrodroid.domain.entity.CommandInstance;
+import com.aimacrodroid.domain.entity.Device;
+import com.aimacrodroid.domain.entity.ScenarioDefinition;
+import com.aimacrodroid.domain.entity.ScenarioStep;
+import com.aimacrodroid.domain.entity.StepInstance;
 import com.aimacrodroid.domain.entity.Task;
 import com.aimacrodroid.domain.entity.TaskDeviceRun;
 import com.aimacrodroid.domain.vo.TaskCreateVO;
 import com.aimacrodroid.domain.vo.TaskDetailVO;
+import com.aimacrodroid.mapper.ScenarioDefinitionMapper;
+import com.aimacrodroid.mapper.ScenarioStepMapper;
+import com.aimacrodroid.mapper.StepInstanceMapper;
+import com.aimacrodroid.mapper.TaskDeviceRunMapper;
 import com.aimacrodroid.mapper.TaskMapper;
-import com.aimacrodroid.service.CommandInstanceService;
-import com.aimacrodroid.service.TaskDeviceRunService;
+import com.aimacrodroid.mapper.DeviceMapper;
+import com.aimacrodroid.service.AuditLogService;
 import com.aimacrodroid.service.TaskService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -19,8 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -28,76 +36,79 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements TaskService {
 
-    private final TaskDeviceRunService taskDeviceRunService;
-    private final CommandInstanceService commandInstanceService;
+    private final TaskDeviceRunMapper taskDeviceRunMapper;
+    private final ScenarioDefinitionMapper scenarioDefinitionMapper;
+    private final ScenarioStepMapper scenarioStepMapper;
+    private final StepInstanceMapper stepInstanceMapper;
+    private final DeviceMapper deviceMapper;
+    private final AuditLogService auditLogService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public TaskCreateVO createTask(TaskCreateReqDTO req) {
-        // 1. 校验参数
-        if ("INTENT".equals(req.getTrack()) && (req.getIntent() == null || req.getIntent().isEmpty())) {
-            throw new IllegalArgumentException("INTENT 轨道必须指定 intent 意图标识");
+        LambdaQueryWrapper<ScenarioDefinition> scenarioQuery = new LambdaQueryWrapper<>();
+        scenarioQuery.eq(ScenarioDefinition::getScenarioKey, req.getScenarioKey());
+        ScenarioDefinition scenario = scenarioDefinitionMapper.selectOne(scenarioQuery);
+        if (scenario == null) {
+            throw new BizException("SCENARIO_NOT_FOUND", "场景不存在");
         }
-        if ("ATOMIC".equals(req.getTrack()) && CollectionUtils.isEmpty(req.getCommands())) {
-            throw new IllegalArgumentException("ATOMIC 轨道必须提供 commands 原子指令列表");
+        if (!"ACTIVE".equals(scenario.getStatus())) {
+            throw new BizException("SCENARIO_NOT_ACTIVE", "场景未发布，无法创建任务");
         }
 
-        // 2. 插入主任务表
+        LambdaQueryWrapper<ScenarioStep> stepQuery = new LambdaQueryWrapper<>();
+        stepQuery.eq(ScenarioStep::getScenarioId, scenario.getId())
+                .eq(ScenarioStep::getIsEnabled, 1)
+                .orderByAsc(ScenarioStep::getStepNo);
+        List<ScenarioStep> scenarioSteps = scenarioStepMapper.selectList(stepQuery);
+        if (CollectionUtils.isEmpty(scenarioSteps)) {
+            throw new BizException("SCENARIO_STEPS_EMPTY", "场景没有可执行步骤");
+        }
+
         Task task = new Task();
         String taskNo = "T-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         task.setTaskNo(taskNo);
-        task.setName(req.getType() + "-" + taskNo);
-        task.setType(req.getType());
-        task.setTrackType(req.getTrack());
+        task.setScenarioId(scenario.getId());
+        task.setScenarioKey(scenario.getScenarioKey());
+        task.setScenarioName(scenario.getScenarioName());
         task.setPriority(req.getPriority());
         task.setStatus("QUEUED");
-        
-        task.setIntent(req.getIntent());
         task.setConstraints(req.getConstraints());
-        task.setSuccessCriteria(req.getSuccessCriteria());
         task.setObservability(req.getObservability());
-        task.setSafetyRails(req.getSafetyRails());
-        task.setRhythm(req.getRhythm());
-        task.setLoopConfig(req.getLoop());
-        task.setRetryPolicy(req.getRetryPolicy());
+        task.setTotalDeviceCount(req.getDevices().size());
+        task.setSuccessDeviceCount(0);
+        task.setFailDeviceCount(0);
 
         this.save(task);
 
-        // 3. 插入设备任务运行态表
         List<TaskDeviceRun> runs = new ArrayList<>();
         for (String deviceId : req.getDevices()) {
+            Device device = getByDeviceCode(deviceId);
             TaskDeviceRun run = new TaskDeviceRun();
             run.setTaskId(task.getId());
-            run.setDeviceId(deviceId);
+            run.setDeviceId(device.getId());
             run.setStatus("PENDING");
             run.setRetryCount(0);
             runs.add(run);
         }
-        taskDeviceRunService.saveBatch(runs);
+        runs.forEach(taskDeviceRunMapper::insert);
 
-        // 4. 如果是原子轨道，插入指令序列表
-        if ("ATOMIC".equals(req.getTrack())) {
-            List<CommandInstance> cmds = new ArrayList<>();
-            int order = 1;
-            for (Map<String, Object> cmdMap : req.getCommands()) {
-                CommandInstance cmd = new CommandInstance();
-                cmd.setTaskId(task.getId());
-                cmd.setCommandId((String) cmdMap.get("commandId"));
-                cmd.setAction((String) cmdMap.get("action"));
-                
-                // 将 map 中取出强转
-                if (cmdMap.get("params") instanceof Map) {
-                    cmd.setParams((Map<String, Object>) cmdMap.get("params"));
-                }
-                if (cmdMap.get("retryPolicy") instanceof Map) {
-                    cmd.setRetryPolicy((Map<String, Object>) cmdMap.get("retryPolicy"));
-                }
-                cmd.setIdempotentKey((String) cmdMap.get("idempotentKey"));
-                cmd.setOrderNum(order++);
-                cmds.add(cmd);
-            }
-            commandInstanceService.saveBatch(cmds);
+        List<StepInstance> stepInstances = new ArrayList<>();
+        for (ScenarioStep scenarioStep : scenarioSteps) {
+            StepInstance stepInstance = new StepInstance();
+            stepInstance.setTaskId(task.getId());
+            stepInstance.setSourceStepId(scenarioStep.getId());
+            stepInstance.setStepNo(scenarioStep.getStepNo());
+            stepInstance.setStepName(scenarioStep.getStepName());
+            stepInstance.setActionCode(scenarioStep.getActionCode());
+            stepInstance.setActionParams(scenarioStep.getActionParams());
+            stepInstance.setTimeoutMs(scenarioStep.getTimeoutMs());
+            stepInstance.setRetryMax(scenarioStep.getRetryMax());
+            stepInstance.setRetryBackoffMs(scenarioStep.getRetryBackoffMs());
+            stepInstances.add(stepInstance);
         }
+        stepInstances.forEach(stepInstanceMapper::insert);
+        auditLogService.record("system", "TASK_CREATE", "TASK", String.valueOf(task.getId()), "SUCCESS", new HashMap<>());
 
         log.info("任务创建成功, TaskNo: {}, 目标设备数: {}", taskNo, req.getDevices().size());
 
@@ -105,6 +116,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 .taskId(task.getId())
                 .taskNo(task.getTaskNo())
                 .status(task.getStatus())
+                .scenarioKey(task.getScenarioKey())
+                .scenarioName(task.getScenarioName())
                 .build();
     }
 
@@ -112,27 +125,51 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public TaskDetailVO getTaskDetail(Long taskId) {
         Task task = this.getById(taskId);
         if (task == null) {
-            throw new RuntimeException("任务不存在");
+            throw new BizException("TASK_NOT_FOUND", "任务不存在");
         }
 
-        // 1. 查询各设备的执行状态
         LambdaQueryWrapper<TaskDeviceRun> runQuery = new LambdaQueryWrapper<>();
-        runQuery.eq(TaskDeviceRun::getTaskId, taskId);
-        List<TaskDeviceRun> deviceRuns = taskDeviceRunService.list(runQuery);
+        runQuery.eq(TaskDeviceRun::getTaskId, taskId).orderByAsc(TaskDeviceRun::getId);
+        List<TaskDeviceRun> deviceRuns = taskDeviceRunMapper.selectList(runQuery);
 
-        // 2. 如果是原子轨道，查询指令序列表
-        List<CommandInstance> commands = null;
-        if ("ATOMIC".equals(task.getTrackType())) {
-            LambdaQueryWrapper<CommandInstance> cmdQuery = new LambdaQueryWrapper<>();
-            cmdQuery.eq(CommandInstance::getTaskId, taskId)
-                    .orderByAsc(CommandInstance::getOrderNum);
-            commands = commandInstanceService.list(cmdQuery);
+        LambdaQueryWrapper<StepInstance> stepQuery = new LambdaQueryWrapper<>();
+        stepQuery.eq(StepInstance::getTaskId, taskId).orderByAsc(StepInstance::getStepNo);
+        List<StepInstance> stepInstances = stepInstanceMapper.selectList(stepQuery);
+
+        HashMap<String, Integer> stats = new HashMap<>();
+        stats.put("total", deviceRuns.size());
+        stats.put("success", 0);
+        stats.put("running", 0);
+        stats.put("fail", 0);
+        stats.put("pending", 0);
+        for (TaskDeviceRun run : deviceRuns) {
+            String status = run.getStatus();
+            if ("SUCCESS".equals(status)) {
+                stats.put("success", stats.get("success") + 1);
+            } else if ("FAIL".equals(status)) {
+                stats.put("fail", stats.get("fail") + 1);
+            } else if ("RUNNING".equals(status)) {
+                stats.put("running", stats.get("running") + 1);
+            } else {
+                stats.put("pending", stats.get("pending") + 1);
+            }
         }
 
         return TaskDetailVO.builder()
                 .task(task)
                 .deviceRuns(deviceRuns)
-                .commands(commands)
+                .stepInstances(stepInstances)
+                .stats(stats)
                 .build();
+    }
+
+    private Device getByDeviceCode(String deviceCode) {
+        LambdaQueryWrapper<Device> query = new LambdaQueryWrapper<>();
+        query.eq(Device::getDeviceId, deviceCode).last("LIMIT 1");
+        Device device = deviceMapper.selectOne(query);
+        if (device == null) {
+            throw new BizException("DEVICE_NOT_FOUND", "设备不存在: " + deviceCode);
+        }
+        return device;
     }
 }

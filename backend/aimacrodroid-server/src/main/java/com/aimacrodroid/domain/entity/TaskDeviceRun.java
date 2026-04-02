@@ -2,10 +2,10 @@ package com.aimacrodroid.domain.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.time.LocalDateTime;
 import java.util.Map;
 
 /**
@@ -13,7 +13,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName(value = "amd_task_device_run", autoResultMap = true)
+@TableName(value = "t_task_device_run", autoResultMap = true)
 public class TaskDeviceRun extends BaseEntity {
 
     /**
@@ -24,17 +24,20 @@ public class TaskDeviceRun extends BaseEntity {
     /**
      * 设备标识
      */
-    private String deviceId;
+    private Long deviceId;
 
     /**
      * 设备任务状态(PENDING/RUNNING/SUCCESS/FAIL)
      */
+    @TableField("run_status")
     private String status;
+
+    private Integer currentStepNo;
 
     /**
      * 执行进度快照(watchedDurationMs, itemsCompleted等)
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(exist = false)
     private Map<String, Object> progress;
 
     /**
@@ -51,4 +54,8 @@ public class TaskDeviceRun extends BaseEntity {
      * 当前重试次数
      */
     private Integer retryCount;
+
+    private LocalDateTime startedAt;
+
+    private LocalDateTime finishedAt;
 }
