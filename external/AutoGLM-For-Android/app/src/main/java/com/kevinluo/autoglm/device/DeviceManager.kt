@@ -71,15 +71,18 @@ class DeviceManager(private val context: Context) {
     }
 
     fun getNetworkType(): String {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork ?: return "NONE"
-        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return "NONE"
-
-        return when {
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
-            else -> "UNKNOWN"
+        return try {
+            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = connectivityManager.activeNetwork ?: return "NONE"
+            val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return "NONE"
+            when {
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+                else -> "UNKNOWN"
+            }
+        } catch (_: SecurityException) {
+            "UNKNOWN"
         }
     }
 

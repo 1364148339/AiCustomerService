@@ -6,7 +6,7 @@ import kotlinx.serialization.json.JsonObject
 @Serializable
 data class TaskDto(
     val id: String,
-    val type: String,
+    val type: String = "ATOMIC",
     val track: String,
     val intent: String? = null,
     val commands: List<JsonObject>? = null,

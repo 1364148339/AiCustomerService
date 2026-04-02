@@ -11,10 +11,10 @@
   - [ ] SubTask 3.1: 建模 Device、CommandTemplate、CommandInstance、Task、RunLog、RiskPolicy
   - [ ] SubTask 3.2: 建模 User、Role、Permission（RBAC）与审计日志
   - [ ] SubTask 3.3: 设计索引与归档策略（日志与截图元数据）
-- [ ] Task 4: 基本 API 与设备集成
-  - [ ] SubTask 4.1: 设备注册/心跳、能力上报、状态查询
-  - [ ] SubTask 4.2: 任务创建、命令队列生成、下发
-  - [ ] SubTask 4.3: 结果回传、状态流记录、失败原因标准化
+- [x] Task 4: 基本 API 与设备集成
+  - [x] SubTask 4.1: 设备注册/心跳、能力上报、状态查询
+  - [x] SubTask 4.2: 任务创建、命令队列生成、下发
+  - [x] SubTask 4.3: 结果回传、状态流记录、失败原因标准化
 - [ ] Task 5: 调度、并发与重试
   - [ ] SubTask 5.1: 简单调度器（定时/批量），并发限制（设备/分组级）
   - [ ] SubTask 5.2: 重试策略与回滚（幂等键、最大次数、退避）
@@ -50,7 +50,7 @@
   - [ ] SubTask 12.2: 服务端消息路由与会话管理，HTTP 长轮询作为降级
   - [ ] SubTask 12.3: 压测并发连接与消息丢失/重试策略
 - [ ] Task 13: 设备心跳扩展与能力集上报
-  - [ ] SubTask 13.1: 上报前台包名、电量、网络类型、是否充电、Shizuku 可用性
+  - [x] SubTask 13.1: 上报前台包名、电量、网络类型、是否充电、Shizuku 可用性
   - [ ] SubTask 13.2: 上报支持的原子命令能力列表（含版本）
   - [ ] SubTask 13.3: 服务端兼容性匹配与调度决策优化
 - [ ] Task 14: 视觉原子命令与前置探测
@@ -63,7 +63,7 @@
   - [ ] SubTask 15.3: 模板成功率热力图与兼容性维度统计
 - [ ] Task 16: 安全与权限增强
   - [ ] SubTask 16.1: 一机一号绑定约束与校验
-  - [ ] SubTask 16.2: 命令 HMAC 签名与设备端校验
+  - [x] SubTask 16.2: 命令 HMAC 签名与设备端校验
   - [ ] SubTask 16.3: 高风险操作二次确认与审计流水
 - [ ] Task 17: 根因归纳与建议自动化
   - [ ] SubTask 17.1: 失败日志/截图聚类与原因分类（LLM 摘要）

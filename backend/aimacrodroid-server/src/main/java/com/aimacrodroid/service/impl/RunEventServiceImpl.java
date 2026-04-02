@@ -26,10 +26,14 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -46,9 +50,22 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void reportEvent(String deviceId, EventReportReqDTO req) {
+    public void reportEvent(String deviceId, String rawToken, EventReportReqDTO req) {
         Device device = getDeviceOrThrow(deviceId);
-        deviceSignatureVerifier.verify(deviceId, device.getToken(), req);
+        try {
+            deviceSignatureVerifier.verify(deviceId, rawToken, device.getTokenHash(), req);
+        } catch (BizException ex) {
+            if ("SIGNATURE_INVALID".equals(ex.getCode()) || "SIGNATURE_EXPIRED".equals(ex.getCode())) {
+                HashMap<String, Object> detail = new HashMap<>();
+                detail.put("deviceId", deviceId);
+                detail.put("taskId", req.getTaskId());
+                detail.put("eventNo", req.getEventNo());
+                detail.put("errorCode", ex.getCode());
+                detail.put("message", ex.getMessage());
+                auditLogService.record(deviceId, "EVENT_SIGNATURE_VERIFY", "RUN_EVENT", req.getEventNo(), "FAIL", detail);
+            }
+            throw ex;
+        }
         if (isDuplicateEvent(req)) {
             return;
         }
@@ -57,17 +74,17 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
         event.setEventNo(req.getEventNo());
         event.setTaskId(req.getTaskId());
         event.setRunId(run.getId());
-        event.setStepId(req.getStepId());
+        event.setStepInstanceId(req.getStepId());
         event.setCommandId(req.getCommandId());
-        event.setStatus(req.getStatus());
+        event.setEventStatus(req.getStatus());
         event.setOccurredAt(toTime(req.getTimestamp()));
         event.setDurationMs(req.getDurationMs());
         event.setErrorCode(req.getErrorCode());
         event.setErrorMessage(req.getErrorMessage());
-        event.setTrace(req.getTrace());
-        event.setThinking(req.getThinking());
-        event.setSensitiveScreenDetected(req.getSensitiveScreenDetected());
-        event.setProgress(req.getProgress());
+        event.setTraceJson(req.getTrace());
+        event.setThinkingText(req.getThinking());
+        event.setIsSensitiveScreen(Boolean.TRUE.equals(req.getSensitiveScreenDetected()) ? 1 : 0);
+        event.setProgressJson(req.getProgress());
         event.setScreenshotUrl(req.getScreenshotUrl());
         event.setHmacSignature(req.getHmac());
         this.save(event);
@@ -79,14 +96,14 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
             snapshot.setRunId(run.getId());
             snapshot.setScreenshotUrl(req.getScreenshotUrl() != null ? req.getScreenshotUrl() : "");
             snapshot.setForegroundPkg(req.getForegroundPkg());
-            snapshot.setElements(req.getElements());
+            snapshot.setElementJson(req.getElements());
             snapshot.setCapturedAt(toTime(req.getTimestamp()));
             snapshotMapper.insert(snapshot);
         }
 
         boolean needUpdate = false;
-        if (canTransit(run.getStatus(), req.getStatus())) {
-            run.setStatus(req.getStatus());
+        if (canTransit(run.getRunStatus(), req.getStatus())) {
+            run.setRunStatus(req.getStatus());
             if ("RUNNING".equals(req.getStatus()) && run.getStartedAt() == null) {
                 run.setStartedAt(LocalDateTime.now());
             }
@@ -94,7 +111,7 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
                 run.setFinishedAt(LocalDateTime.now());
             }
             needUpdate = true;
-        } else if (!req.getStatus().equals(run.getStatus())) {
+        } else if (!req.getStatus().equals(run.getRunStatus())) {
             throw new BizException("INVALID_PARAM", "设备运行状态流转不合法");
         }
         if (req.getErrorCode() != null) {
@@ -106,7 +123,7 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
             taskDeviceRunMapper.updateById(run);
         }
         refreshTaskStatus(req.getTaskId());
-        if ("FAIL".equals(req.getStatus()) || StringUtils.hasText(req.getErrorCode()) || Integer.valueOf(1).equals(req.getSensitiveScreenDetected())) {
+        if ("FAIL".equals(req.getStatus()) || StringUtils.hasText(req.getErrorCode()) || Boolean.TRUE.equals(req.getSensitiveScreenDetected())) {
             HashMap<String, Object> detail = new HashMap<>();
             detail.put("eventNo", req.getEventNo());
             detail.put("status", req.getStatus());
@@ -116,7 +133,7 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
             detail.put("timestamp", req.getTimestamp());
             String alertType = "FAIL";
             String alertKey = StringUtils.hasText(req.getErrorCode()) ? req.getErrorCode() : req.getStatus();
-            if (Integer.valueOf(1).equals(req.getSensitiveScreenDetected())) {
+            if (Boolean.TRUE.equals(req.getSensitiveScreenDetected())) {
                 alertType = "RETRY_EXCEEDED";
                 alertKey = "SENSITIVE_SCREEN";
             }
@@ -146,12 +163,40 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
             query.in(RunEvent::getRunId, runs.stream().map(TaskDeviceRun::getId).toList());
         }
         query.orderByDesc(RunEvent::getOccurredAt).orderByDesc(RunEvent::getId);
-        return this.list(query);
+        List<RunEvent> events = this.list(query);
+        if (events.isEmpty()) {
+            return events;
+        }
+        Set<Long> runIds = events.stream().map(RunEvent::getRunId).collect(Collectors.toSet());
+        LambdaQueryWrapper<TaskDeviceRun> runBindQuery = new LambdaQueryWrapper<>();
+        runBindQuery.in(TaskDeviceRun::getId, runIds);
+        List<TaskDeviceRun> runBinds = taskDeviceRunMapper.selectList(runBindQuery);
+        if (runBinds.isEmpty()) {
+            return events;
+        }
+        Map<Long, Long> runDeviceMap = runBinds.stream()
+                .collect(Collectors.toMap(TaskDeviceRun::getId, TaskDeviceRun::getDeviceId));
+        Set<Long> devicePkIds = runBinds.stream().map(TaskDeviceRun::getDeviceId).collect(Collectors.toSet());
+        LambdaQueryWrapper<Device> deviceQuery = new LambdaQueryWrapper<>();
+        deviceQuery.in(Device::getId, devicePkIds);
+        List<Device> devices = deviceMapper.selectList(deviceQuery);
+        Map<Long, String> deviceCodeMap = devices.stream()
+                .collect(Collectors.toMap(Device::getId, Device::getDeviceCode));
+        for (RunEvent event : events) {
+            Long devicePkId = runDeviceMap.get(event.getRunId());
+            if (devicePkId != null) {
+                event.setDeviceId(deviceCodeMap.getOrDefault(devicePkId, String.valueOf(devicePkId)));
+            }
+            if (event.getOccurredAt() != null) {
+                event.setEventTimestamp(event.getOccurredAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+            }
+        }
+        return events;
     }
 
     private Device getDeviceOrThrow(String deviceId) {
         LambdaQueryWrapper<Device> query = new LambdaQueryWrapper<>();
-        query.eq(Device::getDeviceId, deviceId).last("LIMIT 1");
+        query.eq(Device::getDeviceCode, deviceId).last("LIMIT 1");
         Device device = deviceMapper.selectOne(query);
         if (device == null) {
             throw new BizException("DEVICE_NOT_FOUND", "设备不存在");
@@ -207,12 +252,15 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
         int fail = 0;
         int running = 0;
         int pending = 0;
+        if ("CANCELED".equals(task.getStatus())) {
+            return;
+        }
         for (TaskDeviceRun run : runs) {
-            if ("SUCCESS".equals(run.getStatus())) {
+            if ("SUCCESS".equals(run.getRunStatus())) {
                 success++;
-            } else if ("FAIL".equals(run.getStatus())) {
+            } else if ("FAIL".equals(run.getRunStatus())) {
                 fail++;
-            } else if ("RUNNING".equals(run.getStatus())) {
+            } else if ("RUNNING".equals(run.getRunStatus())) {
                 running++;
             } else {
                 pending++;

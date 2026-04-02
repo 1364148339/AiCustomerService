@@ -1,10 +1,8 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router'
 import { useScenariosStore } from '../stores/scenarios'
 
-const router = useRouter()
 const scenariosStore = useScenariosStore()
 const rows = computed(() => scenariosStore.list)
 const loading = computed(() => scenariosStore.loading)
@@ -14,11 +12,11 @@ const detailLoading = computed(() => scenariosStore.detailLoading)
 const detailVisible = ref(false)
 const createVisible = ref(false)
 const saving = ref(false)
+const publishingKey = ref('')
 const createForm = ref({
   scenarioName: '',
   scenarioKey: '',
-  description: '',
-  taskType: 'CHECKIN'
+  description: ''
 })
 
 function statusTagType(status) {
@@ -52,20 +50,27 @@ async function createScenarioAction() {
   try {
     const created = await scenariosStore.addScenario(createForm.value)
     createVisible.value = false
-    createForm.value = { scenarioName: '', scenarioKey: '', description: '', taskType: 'CHECKIN' }
+    createForm.value = { scenarioName: '', scenarioKey: '', description: '' }
     ElMessage.success(`已创建场景 ${created.scenarioKey}`)
   } catch (error) {
     ElMessage.error(error?.response?.data?.message || '创建场景失败')
   }
 }
 
+async function publishScenarioAction(row) {
+  publishingKey.value = row.scenarioKey
+  try {
+    await scenariosStore.publishScenarioByKey(row.scenarioKey)
+    ElMessage.success(`场景已发布：${row.scenarioKey}`)
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '发布场景失败')
+  } finally {
+    publishingKey.value = ''
+  }
+}
+
 onMounted(async () => {
   await scenariosStore.refreshScenarios()
-  scenariosStore.startPolling()
-})
-
-onBeforeUnmount(() => {
-  scenariosStore.stopPolling()
 })
 </script>
 
@@ -96,10 +101,18 @@ onBeforeUnmount(() => {
           <template #default="{ row }">{{ new Date(row.updatedAt).toLocaleString() }}</template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip />
-        <el-table-column label="操作" width="190" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">编排步骤</el-button>
-            <el-button link @click="router.push(`/tasks/new?scenarioKey=${row.scenarioKey}`)">创建任务</el-button>
+            <el-button
+              v-if="row.status !== 'ACTIVE'"
+              link
+              type="success"
+              :loading="publishingKey === row.scenarioKey"
+              @click="publishScenarioAction(row)"
+            >
+              发布
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -112,12 +125,6 @@ onBeforeUnmount(() => {
         </el-form-item>
         <el-form-item label="场景标识">
           <el-input v-model="createForm.scenarioKey" />
-        </el-form-item>
-        <el-form-item label="任务类型">
-          <el-select v-model="createForm.taskType" style="width: 100%">
-            <el-option label="签到任务" value="CHECKIN" />
-            <el-option label="视频领奖任务" value="VIDEO_REWARD" />
-          </el-select>
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="createForm.description" type="textarea" :rows="3" />

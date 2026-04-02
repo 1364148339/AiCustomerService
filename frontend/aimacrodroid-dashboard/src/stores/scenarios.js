@@ -1,9 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { createScenario, getScenarioDetail, getScenarios, saveScenarioSteps } from '../mock/api'
-import { createPagePolling } from '../utils/polling'
-
-const POLL_INTERVAL = 3000
+import { createScenario, getScenarioDetail, getScenarios, publishScenario, saveScenarioSteps } from '../mock/api'
 
 function createDefaultStep(index) {
   return {
@@ -24,8 +21,6 @@ export const useScenariosStore = defineStore('scenarios', () => {
   const detail = ref(null)
   const detailLoading = ref(false)
   const stepsDraft = ref([])
-
-  const poller = createPagePolling(refreshScenarios, POLL_INTERVAL)
 
   const activeCount = computed(() => list.value.filter((item) => item.status === 'ACTIVE').length)
 
@@ -55,6 +50,15 @@ export const useScenariosStore = defineStore('scenarios', () => {
     const created = await createScenario(payload)
     await refreshScenarios()
     return created
+  }
+
+  async function publishScenarioByKey(scenarioKey) {
+    const published = await publishScenario(scenarioKey)
+    await refreshScenarios()
+    if (detail.value?.scenarioKey === scenarioKey) {
+      await refreshScenarioDetail(scenarioKey)
+    }
+    return published
   }
 
   function appendStep() {
@@ -103,14 +107,6 @@ export const useScenariosStore = defineStore('scenarios', () => {
     await refreshScenarios()
   }
 
-  function startPolling() {
-    poller.start()
-  }
-
-  function stopPolling() {
-    poller.stop()
-  }
-
   return {
     list,
     loading,
@@ -121,11 +117,10 @@ export const useScenariosStore = defineStore('scenarios', () => {
     refreshScenarios,
     refreshScenarioDetail,
     addScenario,
+    publishScenarioByKey,
     appendStep,
     removeStep,
     moveStep,
-    persistSteps,
-    startPolling,
-    stopPolling
+    persistSteps
   }
 })

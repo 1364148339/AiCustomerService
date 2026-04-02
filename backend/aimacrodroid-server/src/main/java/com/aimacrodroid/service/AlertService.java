@@ -10,4 +10,8 @@ public interface AlertService extends IService<Alert> {
     void upsertEventAlert(Long taskId, String deviceId, Long runId, String level, String alertType, String alertKey, Map<String, Object> detail);
 
     List<Alert> queryAlerts(Long taskId);
+
+    void ackAlert(Long alertId);
+
+    void closeAlert(Long alertId, String reason);
 }

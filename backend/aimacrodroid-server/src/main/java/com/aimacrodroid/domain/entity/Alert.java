@@ -8,6 +8,7 @@ import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 import java.util.Map;
+import org.apache.ibatis.type.JdbcType;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -19,16 +20,13 @@ public class Alert extends BaseEntity {
 
     private Long runId;
 
-    @TableField("step_instance_id")
-    private Long stepId;
+    private Long stepInstanceId;
 
-    @TableField("alert_level")
-    private String level;
+    private String alertLevel;
 
     private String alertType;
 
-    @TableField("alert_status")
-    private String status;
+    private String alertStatus;
 
     private String errorCode;
 
@@ -36,8 +34,8 @@ public class Alert extends BaseEntity {
 
     private LocalDateTime lastOccurAt;
 
-    @TableField(value = "detail_json", typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> detail;
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
+    private Map<String, Object> detailJson;
 
     private String closeReason;
 }

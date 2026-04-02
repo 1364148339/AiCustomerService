@@ -31,23 +31,19 @@ public class DeviceReadiness extends BaseEntity {
     /**
      * Shizuku是否运行中(0:否 1:是)
      */
-    @TableField("is_shizuku_available")
-    private Integer shizukuRunning;
+    private Integer isShizukuAvailable;
 
     /**
      * 悬浮窗权限是否授予(0:否 1:是)
      */
-    @TableField("is_overlay_granted")
-    private Integer overlayGranted;
+    private Integer isOverlayGranted;
 
     /**
      * 键盘是否启用(0:否 1:是)
      */
-    @TableField("is_keyboard_enabled")
-    private Integer keyboardEnabled;
+    private Integer isKeyboardEnabled;
 
-    @TableField("is_sse_supported")
-    private Integer sseSupported;
+    private Integer isSseSupported;
 
     /**
      * 最后激活方式(wireless/adb/root)

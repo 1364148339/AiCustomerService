@@ -8,6 +8,7 @@ import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 import java.util.Map;
+import org.apache.ibatis.type.JdbcType;
 
 /**
  * 设备信息与能力表
@@ -20,8 +21,7 @@ public class Device extends BaseEntity {
     /**
      * 设备唯一标识(如Android ID/MAC等)
      */
-    @TableField("device_code")
-    private String deviceId;
+    private String deviceCode;
 
     /**
      * 设备品牌
@@ -70,8 +70,8 @@ public class Device extends BaseEntity {
     /**
      * 设备能力集列表
      */
-    @TableField(value = "capability_json", typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> capabilities;
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
+    private Map<String, Object> capabilityJson;
 
     /**
      * 当前前台包名
@@ -100,18 +100,15 @@ public class Device extends BaseEntity {
     /**
      * 最近心跳时间
      */
-    @TableField("last_seen_at")
-    private LocalDateTime lastHeartbeatTime;
+    private LocalDateTime lastSeenAt;
 
     /**
      * 设备鉴权Token(用于HMAC验签)
      */
-    @TableField("token_hash")
-    private String token;
+    private String tokenHash;
 
     /**
      * 设备状态(ONLINE/OFFLINE)
      */
-    @TableField("device_status")
-    private String status;
+    private String deviceStatus;
 }

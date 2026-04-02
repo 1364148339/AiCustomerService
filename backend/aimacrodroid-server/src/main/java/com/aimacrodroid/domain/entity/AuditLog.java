@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.util.Map;
+import org.apache.ibatis.type.JdbcType;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -26,7 +27,7 @@ public class AuditLog extends BaseEntity {
 
     private String requestIp;
 
-    @TableField(value = "request_payload", typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
     private Map<String, Object> requestPayload;
 
     private String resultCode;

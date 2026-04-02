@@ -13,7 +13,10 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -25,8 +28,8 @@ public class DeviceSignatureVerifier {
     @Value("${security.hmac.window-seconds:300}")
     private long hmacWindowSeconds;
 
-    public void verify(String deviceId, String token, EventReportReqDTO req) {
-        if (!StringUtils.hasText(token)) {
+    public void verify(String deviceId, String rawToken, String tokenHash, EventReportReqDTO req) {
+        if (!StringUtils.hasText(tokenHash)) {
             throw new BizException("SIGNATURE_INVALID", "设备鉴权信息缺失", 401);
         }
         long nowMs = Instant.now().toEpochMilli();
@@ -35,16 +38,30 @@ public class DeviceSignatureVerifier {
             throw new BizException("SIGNATURE_EXPIRED", "签名已过期", 401);
         }
         String signPayload = buildPayload(deviceId, req);
-        String expected = hmacSha256Hex(token, signPayload);
-        if (!expected.equalsIgnoreCase(req.getHmac())) {
+        List<String> secretCandidates = new ArrayList<>();
+        if (StringUtils.hasText(rawToken)) {
+            String rawTokenHash = sha256Hex(rawToken);
+            if (!rawTokenHash.equalsIgnoreCase(tokenHash)) {
+                throw new BizException("SIGNATURE_INVALID", "设备鉴权信息缺失", 401);
+            }
+            secretCandidates.add(rawToken);
+        }
+        secretCandidates.add(tokenHash);
+        for (String secret : secretCandidates) {
+            if (matchesSignature(secret, signPayload, req.getHmac())) {
+                return;
+            }
+        }
+        if (!StringUtils.hasText(req.getHmac())) {
             throw new BizException("SIGNATURE_INVALID", "签名不合法", 401);
         }
+        throw new BizException("SIGNATURE_INVALID", "签名不合法", 401);
     }
 
     private String buildPayload(String deviceId, EventReportReqDTO req) {
         String bodyDigest = sha256Hex(normalizedBody(req));
-        String stepId = req.getStepId() == null ? "" : String.valueOf(req.getStepId());
-        return deviceId + "|" + req.getTaskId() + "|" + stepId + "|" + req.getTimestamp() + "|" + bodyDigest;
+        String stepId = req.getStepId() == null ? (req.getCommandId() == null ? "" : req.getCommandId()) : String.valueOf(req.getStepId());
+        return deviceId + ":" + req.getTaskId() + ":" + stepId + ":" + req.getTimestamp() + ":" + bodyDigest;
     }
 
     private String normalizedBody(EventReportReqDTO req) {
@@ -79,6 +96,26 @@ public class DeviceSignatureVerifier {
             mac.init(keySpec);
             byte[] bytes = mac.doFinal(value.getBytes(StandardCharsets.UTF_8));
             return hex(bytes);
+        } catch (Exception e) {
+            throw new BizException("SIGNATURE_INVALID", "签名校验失败", 401);
+        }
+    }
+
+    private boolean matchesSignature(String secret, String value, String actual) {
+        if (!StringUtils.hasText(actual)) {
+            return false;
+        }
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+            mac.init(keySpec);
+            byte[] bytes = mac.doFinal(value.getBytes(StandardCharsets.UTF_8));
+            String expectedHex = hex(bytes);
+            if (expectedHex.equalsIgnoreCase(actual)) {
+                return true;
+            }
+            String expectedBase64 = Base64.getEncoder().withoutPadding().encodeToString(bytes);
+            return expectedBase64.equals(actual);
         } catch (Exception e) {
             throw new BizException("SIGNATURE_INVALID", "签名校验失败", 401);
         }

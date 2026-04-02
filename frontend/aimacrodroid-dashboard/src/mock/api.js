@@ -5,6 +5,20 @@ const api = axios.create({
   timeout: 10000
 })
 
+const operatorId = import.meta.env.VITE_OPERATOR_ID || 'frontend-admin'
+const operatorRole = String(import.meta.env.VITE_OPERATOR_ROLE || 'ADMIN').toUpperCase()
+
+api.interceptors.request.use((config) => {
+  config.headers = config.headers || {}
+  if (!config.headers['X-Operator-Id']) {
+    config.headers['X-Operator-Id'] = operatorId
+  }
+  if (!config.headers['X-Operator-Role']) {
+    config.headers['X-Operator-Role'] = operatorRole
+  }
+  return config
+})
+
 const allowMockFallback = boolFlag(import.meta.env.VITE_ENABLE_API_FALLBACK)
 
 const localScenarioList = [
@@ -81,7 +95,13 @@ const localTaskMeta = new Map()
 const localAlertStatus = new Map()
 
 function unwrap(resp) {
-  return resp?.data?.data
+  const payload = resp?.data || {}
+  if (payload.code && payload.code !== 'OK') {
+    const error = new Error(payload.message || '请求失败')
+    error.response = { data: payload }
+    throw error
+  }
+  return payload.data
 }
 
 function boolFlag(value) {
@@ -125,22 +145,39 @@ function toLogMessage(event) {
   return `状态变更: ${event.status || 'UNKNOWN'}`
 }
 
+function resolveTaskConstraints(task) {
+  return task?.constraints || task?.taskConstraints || {}
+}
+
+function resolveRunStatus(run) {
+  return run?.status || run?.runStatus || 'PENDING'
+}
+
+function mapStepInstance(step) {
+  return {
+    orderNum: Number(step.stepNo || 0),
+    commandId: step.commandId || step.stepId || String(step.id || ''),
+    action: step.action || step.actionCode || '',
+    params: step.params || step.actionParams || {}
+  }
+}
+
 function mapEvent(item) {
   return {
     taskId: String(item.taskId),
-    deviceId: item.deviceId || '--',
-    commandId: item.commandId || '--',
-    status: item.status || 'RUNNING',
-    timestamp: parseTimestamp(item.eventTimestamp),
-    thinking: item.thinking || '',
+    deviceId: item.deviceId || item.deviceCode || '--',
+    commandId: item.commandId || String(item.stepInstanceId || '--'),
+    status: item.status || item.eventStatus || 'RUNNING',
+    timestamp: parseTimestamp(item.eventTimestamp || item.occurredAt || item.gmtCreate),
+    thinking: item.thinking || item.thinkingText || '',
     thinkingText: item.thinkingText || item.thinking || '',
     screenshotUrl: item.screenshotUrl || '',
     traceJson: safeJsonStringify(item.traceJson || item.trace || ''),
-    elementJson: safeJsonStringify(item.elementJson || item.element || ''),
-    stepNo: Number(item.stepNo || item.currentStepNo || 0),
-    sensitiveScreenDetected: boolFlag(item.sensitiveScreenDetected),
+    elementJson: safeJsonStringify(item.elementJson || item.elements || item.element || ''),
+    stepNo: Number(item.stepNo || item.currentStepNo || item.stepInstanceId || 0),
+    sensitiveScreenDetected: boolFlag(item.sensitiveScreenDetected ?? item.isSensitiveScreen),
     errorCode: item.errorCode || '',
-    progress: item.progress || {},
+    progress: item.progress || item.progressJson || {},
     durationMs: item.durationMs || 0
   }
 }
@@ -150,35 +187,38 @@ function normalizeScenario(raw) {
     scenarioId: String(raw.scenarioId || raw.id || ''),
     scenarioKey: raw.scenarioKey || '',
     scenarioName: raw.scenarioName || raw.name || '',
-    description: raw.description || '',
+    description: raw.description || raw.scenarioDesc || '',
     status: raw.status || 'DRAFT',
     versionNo: Number(raw.versionNo || 1),
-    updatedAt: raw.updatedAt || raw.gmtModified || new Date().toISOString(),
+    updatedAt: raw.updatedAt || raw.gmtModified || raw.gmtCreate || new Date().toISOString(),
     taskType: raw.taskType || 'CHECKIN'
   }
 }
 
 function normalizeStep(step, index) {
+  const enabledByLegacy = step.enabled !== false && step.enabled !== 0
+  const enabledByBackend = step.isEnabled === undefined ? true : boolFlag(step.isEnabled)
   return {
     stepId: step.stepId || `local-step-${index + 1}`,
-    orderNo: Number(step.orderNo || index + 1),
+    orderNo: Number(step.orderNo || step.stepNo || index + 1),
     stepName: step.stepName || '',
     action: step.action || step.actionCode || '',
     params: step.params || step.actionParams || {},
     timeoutMs: Number(step.timeoutMs || 5000),
-    retryPolicy: step.retryPolicy || { maxRetries: Number(step.retryMax || 0), backoffMs: 1000 },
-    enabled: step.enabled !== false && step.enabled !== 0
+    retryPolicy: step.retryPolicy || { maxRetries: Number(step.retryMax || 0), backoffMs: Number(step.retryBackoffMs || 1000) },
+    enabled: enabledByLegacy && enabledByBackend
   }
 }
 
 function summarizeTask(task, runs) {
   const taskId = String(task.id)
   const meta = localTaskMeta.get(taskId) || {}
-  const scenarioKey = task?.constraints?.scenarioKey || meta.scenarioKey || ''
-  const scenarioName = task?.constraints?.scenarioName || meta.scenarioName || ''
-  const success = runs.filter((r) => r.status === 'SUCCESS').length
-  const fail = runs.filter((r) => r.status === 'FAIL').length
-  const running = runs.filter((r) => ['RUNNING', 'PENDING'].includes(r.status)).length
+  const constraints = resolveTaskConstraints(task)
+  const scenarioKey = constraints?.scenarioKey || task?.scenarioKey || meta.scenarioKey || ''
+  const scenarioName = constraints?.scenarioName || task?.scenarioName || meta.scenarioName || ''
+  const success = runs.filter((r) => resolveRunStatus(r) === 'SUCCESS').length
+  const fail = runs.filter((r) => resolveRunStatus(r) === 'FAIL').length
+  const running = runs.filter((r) => ['RUNNING', 'PENDING'].includes(resolveRunStatus(r))).length
   return {
     taskId,
     taskNo: task.taskNo || '',
@@ -236,30 +276,34 @@ export async function getDevices() {
   ).length
   const list = await Promise.all(
     devices.map(async (item) => {
+      const deviceId = String(item.deviceId || item.deviceCode || item.id || '')
+      const status = String(item.status || item.deviceStatus || '').toUpperCase()
       let readiness = null
       try {
-        const readinessResp = await api.get(`/api/devices/${item.deviceId}/readiness`)
-        readiness = unwrap(readinessResp)
+        if (deviceId) {
+          const readinessResp = await api.get(`/api/devices/${deviceId}/readiness`)
+          readiness = unwrap(readinessResp)
+        }
       } catch {
         readiness = null
       }
       return {
-        id: item.deviceId,
+        id: deviceId,
         brand: item.brand || '',
         model: item.model || '',
         androidVersion: item.androidVersion || '--',
         resolution: item.resolution || '--',
-        online: (item.status || '').toUpperCase() === 'ONLINE',
-        lastHeartbeat: parseTimestamp(item.lastHeartbeatTime || item.gmtModified),
+        online: status === 'ONLINE',
+        lastHeartbeat: parseTimestamp(item.lastHeartbeatTime || item.lastSeenAt || item.gmtModified),
         foregroundPkg: item.foregroundPkg || '',
         batteryPct: item.batteryPct ?? 0,
-        charging: boolFlag(item.isCharging),
+        charging: boolFlag(item.isCharging ?? item.charging),
         networkType: item.networkType || '--',
         shizukuAvailable: boolFlag(readiness?.shizukuRunning ?? item.shizukuAvailable),
         overlayGranted: boolFlag(readiness?.overlayGranted ?? item.overlayGranted),
         keyboardEnabled: boolFlag(readiness?.keyboardEnabled ?? item.keyboardEnabled),
         lastActivationMethod: readiness?.lastActivationMethod || '--',
-        capabilities: toArrayCapabilities(item.capabilities),
+        capabilities: toArrayCapabilities(item.capabilities || item.capabilityJson),
         sseSupported: boolFlag(item.sseSupported)
       }
     })
@@ -324,6 +368,7 @@ export async function getTaskDetail(taskId) {
   ])
   const detail = unwrap(detailResp)
   if (!detail?.task) return null
+  const constraints = resolveTaskConstraints(detail.task)
   const events = (unwrap(eventsResp) || [])
     .filter((event) => String(event.taskId) === String(taskId))
     .map(mapEvent)
@@ -354,26 +399,26 @@ export async function getTaskDetail(taskId) {
     type: detail.task.type || '',
     track: detail.task.trackType || '',
     status: detail.task.status || '',
-    scenarioKey: detail.task.constraints?.scenarioKey || localTaskMeta.get(String(detail.task.id))?.scenarioKey || '',
+    scenarioKey: constraints?.scenarioKey || detail.task.scenarioKey || localTaskMeta.get(String(detail.task.id))?.scenarioKey || '',
     scenarioName:
-      detail.task.constraints?.scenarioName || localTaskMeta.get(String(detail.task.id))?.scenarioName || '',
+      constraints?.scenarioName || detail.task.scenarioName || localTaskMeta.get(String(detail.task.id))?.scenarioName || '',
     priority: detail.task.priority ?? 5,
     intent: detail.task.intent || '',
     createdAt: parseTimestamp(detail.task.gmtCreate),
-    constraints: detail.task.constraints || {},
+    constraints,
     successCriteria: detail.task.successCriteria || {},
     observability: detail.task.observability || {},
     safetyRails: detail.task.safetyRails || {},
     rhythm: detail.task.rhythm || {},
     devicesRuns: runs.map((run) => ({
       deviceId: run.deviceId,
-      status: run.status,
+      status: resolveRunStatus(run),
       retry: run.retryCount || 0,
       errorCode: run.errorCode || '',
       errorMessage: run.errorMessage || '',
       progress: run.progress || {}
     })),
-    commands: detail.commands || [],
+    commands: (detail.commands || detail.stepInstances || []).map(mapStepInstance),
     events,
     evidences,
     elementSnapshots,
@@ -456,7 +501,8 @@ export async function closeAlert(alertId) {
 export async function getScenarios() {
   try {
     const resp = await api.get('/api/scenarios')
-    const list = unwrap(resp) || []
+    const data = unwrap(resp) || []
+    const list = Array.isArray(data) ? data : data.records || []
     return list.map(normalizeScenario)
   } catch {
     if (!allowMockFallback) throw new Error('获取场景失败，请检查后端服务连接')
@@ -466,7 +512,11 @@ export async function getScenarios() {
 
 export async function createScenario(payload) {
   try {
-    const resp = await api.post('/api/scenarios', payload)
+    const resp = await api.post('/api/scenarios', {
+      scenarioName: payload.scenarioName,
+      scenarioKey: payload.scenarioKey,
+      description: payload.description || ''
+    })
     return normalizeScenario(unwrap(resp) || {})
   } catch {
     if (!allowMockFallback) throw new Error('创建场景失败，请检查后端服务连接')
@@ -478,7 +528,7 @@ export async function createScenario(payload) {
       status: 'DRAFT',
       versionNo: 1,
       updatedAt: new Date().toISOString(),
-      taskType: payload.taskType || 'CHECKIN'
+      taskType: 'CHECKIN'
     }
     localScenarioList.unshift(scenario)
     localScenarioSteps[scenario.scenarioKey] = []
@@ -490,7 +540,7 @@ export async function getScenarioDetail(key) {
   try {
     const resp = await api.get(`/api/scenarios/${key}`)
     const detail = unwrap(resp) || {}
-    const scenario = normalizeScenario(detail)
+    const scenario = normalizeScenario(detail.scenario || detail)
     return {
       ...scenario,
       steps: (detail.steps || []).map(normalizeStep).sort((a, b) => a.orderNo - b.orderNo)
@@ -511,19 +561,22 @@ export async function saveScenarioSteps(key, steps) {
     .map((item, index) => normalizeStep({ ...item, orderNo: index + 1 }, index))
     .sort((a, b) => a.orderNo - b.orderNo)
   try {
-    await api.put(`/api/scenarios/${key}/steps`, {
+    const resp = await api.put(`/api/scenarios/${key}/steps`, {
       steps: ordered.map((item) => ({
         stepId: item.stepId,
-        orderNo: item.orderNo,
+        stepNo: item.orderNo,
         stepName: item.stepName,
-        action: item.action,
-        params: item.params,
+        actionCode: item.action,
+        actionParams: item.params,
         timeoutMs: item.timeoutMs,
-        retryPolicy: item.retryPolicy,
+        retryMax: Number(item.retryPolicy?.maxRetries || 0),
+        retryBackoffMs: Number(item.retryPolicy?.backoffMs || 1000),
         enabled: item.enabled
       }))
     })
-  } catch {
+    unwrap(resp)
+  } catch (error) {
+    if (error?.response?.data?.code && error?.response?.data?.code !== 'OK') throw error
     if (!allowMockFallback) throw new Error('保存场景步骤失败，请检查后端服务连接')
     localScenarioSteps[key] = ordered
     const scenario = localScenarioList.find((item) => item.scenarioKey === key)
@@ -534,4 +587,19 @@ export async function saveScenarioSteps(key, steps) {
     }
   }
   return { ok: true }
+}
+
+export async function publishScenario(key) {
+  try {
+    const resp = await api.post(`/api/scenarios/${key}/publish`)
+    return normalizeScenario(unwrap(resp) || {})
+  } catch {
+    if (!allowMockFallback) throw new Error('发布场景失败，请检查后端服务连接')
+    const scenario = localScenarioList.find((item) => item.scenarioKey === key)
+    if (!scenario) throw new Error('场景不存在')
+    scenario.status = 'ACTIVE'
+    scenario.versionNo = Number(scenario.versionNo || 0) + 1
+    scenario.updatedAt = new Date().toISOString()
+    return { ...scenario }
+  }
 }

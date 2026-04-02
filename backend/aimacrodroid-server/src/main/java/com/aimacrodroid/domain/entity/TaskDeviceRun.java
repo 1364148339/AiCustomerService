@@ -29,8 +29,7 @@ public class TaskDeviceRun extends BaseEntity {
     /**
      * 设备任务状态(PENDING/RUNNING/SUCCESS/FAIL)
      */
-    @TableField("run_status")
-    private String status;
+    private String runStatus;
 
     private Integer currentStepNo;
 

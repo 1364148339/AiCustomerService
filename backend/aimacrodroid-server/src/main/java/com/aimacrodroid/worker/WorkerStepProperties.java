@@ -10,4 +10,5 @@ import org.springframework.stereotype.Component;
 public class WorkerStepProperties {
     private Integer defaultTimeoutMs = 5000;
     private Integer maxRetryDefault = 1;
+    private Integer defaultBackoffMs = 1000;
 }

@@ -58,8 +58,8 @@ public class EventReportReqDTO {
     @Schema(description = "大模型意图思考过程摘要")
     private String thinking;
 
-    @Schema(description = "是否触发敏感页面保护(0:否 1:是)")
-    private Integer sensitiveScreenDetected = 0;
+    @Schema(description = "是否触发敏感页面保护")
+    private Boolean sensitiveScreenDetected = false;
 
     @Schema(description = "本节点的进度数据快照")
     private Map<String, Object> progress;

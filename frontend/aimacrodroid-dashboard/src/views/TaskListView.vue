@@ -25,7 +25,7 @@ const createForm = ref({
   snapshotLevel: '',
   logDetail: ''
 })
-const scenarioOptions = computed(() => scenariosStore.list)
+const scenarioOptions = computed(() => scenariosStore.list.filter((item) => item.status === 'ACTIVE'))
 const deviceOptions = computed(() => devicesStore.list)
 const selectedScenario = computed(() =>
   scenarioOptions.value.find((item) => item.scenarioKey === createForm.value.scenarioKey) || null

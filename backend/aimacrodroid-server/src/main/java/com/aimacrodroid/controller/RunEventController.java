@@ -3,6 +3,8 @@ package com.aimacrodroid.controller;
 import com.aimacrodroid.common.api.Result;
 import com.aimacrodroid.domain.dto.EventReportReqDTO;
 import com.aimacrodroid.domain.entity.RunEvent;
+import com.aimacrodroid.security.OperatorRole;
+import com.aimacrodroid.security.RequireRoles;
 import com.aimacrodroid.service.RunEventService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,13 +25,15 @@ public class RunEventController {
     @Operation(summary = "设备端事件回传", description = "设备端在任务执行关键节点(如截图、点击、失败)时回传事件")
     @PostMapping("/{deviceId}/events")
     public Result<Void> reportEvent(@PathVariable("deviceId") String deviceId, 
+                                    @RequestHeader(value = "X-Device-Token", required = false) String rawToken,
                                     @Validated @RequestBody EventReportReqDTO req) {
-        runEventService.reportEvent(deviceId, req);
+        runEventService.reportEvent(deviceId, rawToken, req);
         return Result.success();
     }
 
     @Operation(summary = "查询执行日志", description = "按任务和设备筛选执行日志")
     @GetMapping("/events")
+    @RequireRoles({OperatorRole.ADMIN, OperatorRole.OPS, OperatorRole.READONLY})
     public Result<List<RunEvent>> listAll(@RequestParam(value = "taskId", required = false) Long taskId,
                                           @RequestParam(value = "deviceId", required = false) String deviceId) {
         return Result.success(runEventService.queryLogs(taskId, deviceId));

@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.util.Map;
+import org.apache.ibatis.type.JdbcType;
 
 /**
  * 原子任务指令序列表
@@ -34,13 +35,13 @@ public class CommandInstance extends BaseEntity {
     /**
      * 动作核心参数(target, pkg等)
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
     private Map<String, Object> params;
 
     /**
      * 指令级重试策略
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
     private Map<String, Object> retryPolicy;
 
     /**

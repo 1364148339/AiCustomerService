@@ -9,6 +9,7 @@ import lombok.EqualsAndHashCode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import org.apache.ibatis.type.JdbcType;
 
 /**
  * 截图与页面结构快照存证表
@@ -46,8 +47,8 @@ public class Snapshot extends BaseEntity {
     /**
      * OCR/Accessibility树提取的结构化视图数据
      */
-    @TableField(value = "element_json", typeHandler = JacksonTypeHandler.class)
-    private List<Map<String, Object>> elements;
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
+    private List<Map<String, Object>> elementJson;
 
     /**
      * 快照在设备端的生成时间戳

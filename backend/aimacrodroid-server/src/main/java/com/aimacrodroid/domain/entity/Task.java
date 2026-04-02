@@ -8,6 +8,7 @@ import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 import java.util.Map;
+import org.apache.ibatis.type.JdbcType;
 
 /**
  * 全局下发任务主表
@@ -38,10 +39,10 @@ public class Task extends BaseEntity {
      */
     private String status;
 
-    @TableField(value = "task_constraints", typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> constraints;
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
+    private Map<String, Object> taskConstraints;
 
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
     private Map<String, Object> observability;
 
     private Integer totalDeviceCount;

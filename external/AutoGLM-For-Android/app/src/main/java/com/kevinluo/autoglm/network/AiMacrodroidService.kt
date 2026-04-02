@@ -21,6 +21,7 @@ import com.kevinluo.autoglm.network.model.HeartbeatReq
 import com.kevinluo.autoglm.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -107,6 +108,11 @@ class AiMacrodroidService : Service() {
     private lateinit var eventRetryStore: EventRetryStore
     private val pendingEvents = mutableListOf<QueuedEvent>()
     private val taskRuntimeMap = mutableMapOf<String, RemoteTaskRuntime>()
+    private var heartbeatJob: Job? = null
+    private var pollJob: Job? = null
+    private var observeJob: Job? = null
+    private var retryJob: Job? = null
+    private var guardJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -118,45 +124,53 @@ class AiMacrodroidService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Logger.i(TAG, "AiMacrodroidService started")
-        serviceScope.launch {
-            try {
-                if (registerDeviceIfNeeded()) {
-                    startHeartbeatLoop()
-                } else {
-                    Logger.e(TAG, "Device registration failed, cannot start heartbeat")
+        if (heartbeatJob?.isActive != true) {
+            heartbeatJob = serviceScope.launch {
+                try {
+                    if (registerDeviceIfNeeded()) {
+                        startHeartbeatLoop()
+                    } else {
+                        Logger.e(TAG, "Device registration failed, cannot start heartbeat")
+                    }
+                } catch (e: Exception) {
+                    Logger.e(TAG, "Error in AiMacrodroidService loop", e)
                 }
-            } catch (e: Exception) {
-                Logger.e(TAG, "Error in AiMacrodroidService loop", e)
             }
         }
-
-        serviceScope.launch {
-            try {
-                startTaskPollLoop()
-            } catch (e: Exception) {
-                Logger.e(TAG, "Error in AiMacrodroidService poll task loop", e)
+        if (pollJob?.isActive != true) {
+            pollJob = serviceScope.launch {
+                try {
+                    startTaskPollLoop()
+                } catch (e: Exception) {
+                    Logger.e(TAG, "Error in AiMacrodroidService poll task loop", e)
+                }
             }
         }
-
-        serviceScope.launch {
-            try {
-                observeTaskEvents()
-            } catch (e: Exception) {
-                Logger.e(TAG, "Error observing task events", e)
+        if (observeJob?.isActive != true) {
+            observeJob = serviceScope.launch {
+                try {
+                    observeTaskEvents()
+                } catch (e: Exception) {
+                    Logger.e(TAG, "Error observing task events", e)
+                }
             }
         }
-        serviceScope.launch {
-            try {
-                startEventRetryLoop()
-            } catch (e: Exception) {
-                Logger.e(TAG, "Error in event retry loop", e)
+        if (retryJob?.isActive != true) {
+            retryJob = serviceScope.launch {
+                try {
+                    startEventRetryLoop()
+                } catch (e: Exception) {
+                    Logger.e(TAG, "Error in event retry loop", e)
+                }
             }
         }
-        serviceScope.launch {
-            try {
-                startRuntimeGuardLoop()
-            } catch (e: Exception) {
-                Logger.e(TAG, "Error in runtime guard loop", e)
+        if (guardJob?.isActive != true) {
+            guardJob = serviceScope.launch {
+                try {
+                    startRuntimeGuardLoop()
+                } catch (e: Exception) {
+                    Logger.e(TAG, "Error in runtime guard loop", e)
+                }
             }
         }
 
@@ -206,7 +220,7 @@ class AiMacrodroidService : Service() {
             _connectionState.value = ConnectionState.CONNECTING
             val resp = AiMacrodroidApiClient.getInstance(this).api.registerDevice(req)
             val registerData = resp.data
-            if (resp.code == 200L && registerData?.registered == true) {
+            if (resp.isSuccess() && registerData?.registered == true) {
                 tokenManager.saveToken(registerData.token)
                 _connectionState.value = ConnectionState.CONNECTED
                 Logger.i(TAG, "Device registered successfully")
@@ -218,6 +232,7 @@ class AiMacrodroidService : Service() {
             }
         } catch (e: Exception) {
             Logger.e(TAG, "Device registration failed", e)
+            _connectionState.value = ConnectionState.ERROR
             return false
         }
     }
@@ -249,12 +264,18 @@ class AiMacrodroidService : Service() {
 
                 Logger.d(TAG, "Sending heartbeat...")
                 val resp = AiMacrodroidApiClient.getInstance(this).api.heartbeat(req)
-                if (resp.code == 200L) {
+                if (resp.isSuccess()) {
                     Logger.d(TAG, "Heartbeat ok")
                     _connectionState.value = ConnectionState.CONNECTED
                 } else {
-                    Logger.w(TAG, "Heartbeat returned not ok")
-                    _connectionState.value = ConnectionState.ERROR
+                    Logger.w(TAG, "Heartbeat returned not ok, code=${resp.codeText()}, message=${resp.message}")
+                    if (resp.needReRegister()) {
+                        TokenManager.getInstance(this).clearToken()
+                        val registered = registerDeviceIfNeeded()
+                        _connectionState.value = if (registered) ConnectionState.CONNECTED else ConnectionState.ERROR
+                    } else {
+                        _connectionState.value = ConnectionState.ERROR
+                    }
                 }
             } catch (e: Exception) {
                 Logger.e(TAG, "Heartbeat failed", e)
@@ -278,7 +299,12 @@ class AiMacrodroidService : Service() {
             }
 
             try {
-                if (taskExecutionManager.canStartTask()) {
+                val hasInFlightTask = synchronized(runtimeLock) {
+                    _currentRemoteTask.value != null || taskRuntimeMap.isNotEmpty()
+                }
+                if (hasInFlightTask) {
+                    Logger.d(TAG, "Remote task in-flight, skipping poll")
+                } else if (taskExecutionManager.canStartTask()) {
                     Logger.d(TAG, "Polling for tasks...")
                     val tasks = AiMacrodroidApiClient.getInstance(this).api.pollTasks(deviceManager.deviceId).data.orEmpty()
                     if (tasks.isNotEmpty()) {
@@ -316,6 +342,7 @@ class AiMacrodroidService : Service() {
             ?: EVENT_RETRY_BASE_BACKOFF_MS
         val stepTimeoutMs = readLong(taskDto.constraints, "stepTimeoutMs")
             ?: readLong(taskDto.loop, "stepTimeoutMs")
+            ?: resolveStepTimeoutFromCommands(taskDto)
             ?: STEP_DEFAULT_TIMEOUT_MS
         val deadlineAtMs = resolveDeadlineAt(taskDto)
         val runtime = RemoteTaskRuntime(
@@ -348,12 +375,16 @@ class AiMacrodroidService : Service() {
             if (!commands.isNullOrEmpty()) {
                 val promptBuilder = StringBuilder("请按顺序执行以下操作：\n")
                 commands.forEachIndexed { index, cmd ->
-                    val action = cmd["action"]?.let { if (it is JsonPrimitive) it.content else it.toString() } ?: "unknown"
+                    val action = (cmd["action"] ?: cmd["actionCode"])?.let { if (it is JsonPrimitive) it.content else it.toString() } ?: "unknown"
+                    val stepName = cmd["stepName"]?.let { if (it is JsonPrimitive) it.content else it.toString() } ?: ""
                     val target = cmd["target"]?.let { if (it is JsonPrimitive) it.content else it.toString() } ?: ""
                     val value = cmd["value"]?.let { if (it is JsonPrimitive) it.content else it.toString() } ?: ""
+                    val params = cmd["params"]?.toString().orEmpty()
                     promptBuilder.append("${index + 1}. 操作类型: $action")
+                    if (stepName.isNotBlank()) promptBuilder.append(", 步骤名: $stepName")
                     if (target.isNotBlank()) promptBuilder.append(", 目标: $target")
                     if (value.isNotBlank()) promptBuilder.append(", 值: $value")
+                    if (params.isNotBlank() && params != "{}") promptBuilder.append(", 参数: $params")
                     promptBuilder.append("\n")
                 }
                 promptBuilder.toString()
@@ -629,10 +660,10 @@ class AiMacrodroidService : Service() {
         return try {
             val api = AiMacrodroidApiClient.getInstance(this).api
             val resp = api.reportEvent(deviceId, req)
-            if (resp.code == 200L) {
+            if (resp.isSuccess()) {
                 true
             } else {
-                if (resp.code == 401L) {
+                if (resp.needReRegister()) {
                     val tokenManager = TokenManager.getInstance(this)
                     tokenManager.clearToken()
                     registerDeviceIfNeeded()
@@ -718,6 +749,18 @@ class AiMacrodroidService : Service() {
         } else {
             now + deadlineRaw
         }
+    }
+
+    private fun resolveStepTimeoutFromCommands(taskDto: TaskDto): Long? {
+        val commands = taskDto.commands ?: return null
+        var maxTimeout: Long? = null
+        for (cmd in commands) {
+            val timeout = cmd["timeoutMs"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: continue
+            if (timeout > 0 && (maxTimeout == null || timeout > maxTimeout)) {
+                maxTimeout = timeout
+            }
+        }
+        return maxTimeout
     }
 
     private fun createNotification(): Notification {

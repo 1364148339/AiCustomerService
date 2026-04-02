@@ -11,6 +11,7 @@ import com.aimacrodroid.mapper.TaskMapper;
 import com.aimacrodroid.service.AlertService;
 import com.aimacrodroid.service.AuditLogService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -54,7 +55,7 @@ public class TaskWorker {
     @Transactional(rollbackFor = Exception.class)
     public void scanTimeoutRuns() {
         LambdaQueryWrapper<TaskDeviceRun> query = new LambdaQueryWrapper<>();
-        query.eq(TaskDeviceRun::getStatus, "RUNNING")
+        query.eq(TaskDeviceRun::getRunStatus, "RUNNING")
                 .orderByAsc(TaskDeviceRun::getGmtModified)
                 .last("LIMIT " + (dispatchProperties.getBatchSize() * 5));
         List<TaskDeviceRun> runningRuns = taskDeviceRunMapper.selectList(query);
@@ -66,9 +67,12 @@ public class TaskWorker {
     }
 
     private void dispatchTaskRuns(Task task) {
+        if ("CANCELED".equals(task.getStatus()) || "SUCCESS".equals(task.getStatus()) || "FAIL".equals(task.getStatus())) {
+            return;
+        }
         LambdaQueryWrapper<TaskDeviceRun> runQuery = new LambdaQueryWrapper<>();
         runQuery.eq(TaskDeviceRun::getTaskId, task.getId())
-                .eq(TaskDeviceRun::getStatus, "PENDING")
+                .eq(TaskDeviceRun::getRunStatus, "PENDING")
                 .orderByAsc(TaskDeviceRun::getGmtCreate);
         List<TaskDeviceRun> pendingRuns = taskDeviceRunMapper.selectList(runQuery);
         int dispatched = 0;
@@ -76,7 +80,7 @@ public class TaskWorker {
             if (!canDispatch(run.getDeviceId())) {
                 continue;
             }
-            run.setStatus("RUNNING");
+            run.setRunStatus("RUNNING");
             if (run.getStartedAt() == null) {
                 run.setStartedAt(LocalDateTime.now());
             }
@@ -105,7 +109,7 @@ public class TaskWorker {
     private boolean canDispatch(Long deviceId) {
         LambdaQueryWrapper<TaskDeviceRun> query = new LambdaQueryWrapper<>();
         query.eq(TaskDeviceRun::getDeviceId, deviceId)
-                .eq(TaskDeviceRun::getStatus, "RUNNING");
+                .eq(TaskDeviceRun::getRunStatus, "RUNNING");
         Long runningCount = taskDeviceRunMapper.selectCount(query);
         return runningCount == null || runningCount < dispatchProperties.getDeviceConcurrency();
     }
@@ -115,10 +119,10 @@ public class TaskWorker {
         event.setEventNo(workerEventNo("DISPATCH"));
         event.setTaskId(taskId);
         event.setRunId(run.getId());
-        event.setStepId(resolveCurrentStepId(taskId, run.getCurrentStepNo()));
-        event.setStatus("RUNNING");
+        event.setStepInstanceId(resolveCurrentStepId(taskId, run.getCurrentStepNo()));
+        event.setEventStatus("RUNNING");
         event.setOccurredAt(LocalDateTime.now());
-        event.setSensitiveScreenDetected(0);
+        event.setIsSensitiveScreen(0);
         runEventMapper.insert(event);
     }
 
@@ -133,7 +137,7 @@ public class TaskWorker {
         if (runBaseTime != null && runBaseTime.plusNanos(stepTimeoutMs * 1_000_000L).isBefore(now)) {
             return true;
         }
-        Long deadlineMs = extractDeadlineMs(task.getConstraints());
+        Long deadlineMs = extractDeadlineMs(task.getTaskConstraints());
         if (deadlineMs != null && deadlineMs > 0) {
             LocalDateTime taskBaseTime = task.getStartedAt() == null ? task.getGmtCreate() : task.getStartedAt();
             return taskBaseTime != null && taskBaseTime.plusNanos(deadlineMs * 1_000_000L).isBefore(now);
@@ -142,21 +146,66 @@ public class TaskWorker {
     }
 
     private void markRunTimeout(TaskDeviceRun run) {
-        run.setStatus("FAIL");
-        run.setErrorCode("STEP_EXEC_TIMEOUT");
-        run.setErrorMessage("执行超时");
-        run.setFinishedAt(LocalDateTime.now());
-        taskDeviceRunMapper.updateById(run);
+        int retryMax = resolveStepRetryMax(run.getTaskId(), run.getCurrentStepNo());
+        int retryCount = run.getRetryCount() == null ? 0 : run.getRetryCount();
+        if (retryCount < retryMax) {
+            int retryBackoffMs = resolveStepRetryBackoffMs(run.getTaskId(), run.getCurrentStepNo());
+            LocalDateTime nextStartedAt = LocalDateTime.now().plusNanos(retryBackoffMs * 1_000_000L);
+            LambdaUpdateWrapper<TaskDeviceRun> retryUpdate = new LambdaUpdateWrapper<>();
+            retryUpdate.eq(TaskDeviceRun::getId, run.getId())
+                    .eq(TaskDeviceRun::getRunStatus, "RUNNING")
+                    .set(TaskDeviceRun::getRetryCount, retryCount + 1)
+                    .set(TaskDeviceRun::getErrorCode, null)
+                    .set(TaskDeviceRun::getErrorMessage, null)
+                    .set(TaskDeviceRun::getStartedAt, nextStartedAt);
+            int retryUpdated = taskDeviceRunMapper.update(null, retryUpdate);
+            if (retryUpdated < 1) {
+                return;
+            }
+            RunEvent retryEvent = new RunEvent();
+            retryEvent.setEventNo(workerEventNo("RETRY"));
+            retryEvent.setTaskId(run.getTaskId());
+            retryEvent.setRunId(run.getId());
+            retryEvent.setStepInstanceId(resolveCurrentStepId(run.getTaskId(), run.getCurrentStepNo()));
+            retryEvent.setEventStatus("RUNNING");
+            retryEvent.setOccurredAt(LocalDateTime.now());
+            retryEvent.setErrorCode("STEP_RETRYING");
+            retryEvent.setErrorMessage("步骤超时重试");
+            retryEvent.setIsSensitiveScreen(0);
+            runEventMapper.insert(retryEvent);
+            Map<String, Object> retryDetail = new HashMap<>();
+            retryDetail.put("runId", run.getId());
+            retryDetail.put("taskId", run.getTaskId());
+            retryDetail.put("deviceId", run.getDeviceId());
+            retryDetail.put("stepNo", run.getCurrentStepNo());
+            retryDetail.put("retryCount", retryCount + 1);
+            retryDetail.put("retryMax", retryMax);
+            retryDetail.put("backoffMs", retryBackoffMs);
+            auditLogService.record("worker", "RUN_RETRY_BACKOFF", "TASK_DEVICE_RUN", String.valueOf(run.getId()), "SUCCESS", retryDetail);
+            return;
+        }
+        LocalDateTime finishedAt = LocalDateTime.now();
+        LambdaUpdateWrapper<TaskDeviceRun> failUpdate = new LambdaUpdateWrapper<>();
+        failUpdate.eq(TaskDeviceRun::getId, run.getId())
+                .eq(TaskDeviceRun::getRunStatus, "RUNNING")
+                .set(TaskDeviceRun::getRunStatus, "FAIL")
+                .set(TaskDeviceRun::getErrorCode, "STEP_EXEC_TIMEOUT")
+                .set(TaskDeviceRun::getErrorMessage, "执行超时")
+                .set(TaskDeviceRun::getFinishedAt, finishedAt);
+        int failUpdated = taskDeviceRunMapper.update(null, failUpdate);
+        if (failUpdated < 1) {
+            return;
+        }
         RunEvent event = new RunEvent();
         event.setEventNo(workerEventNo("TIMEOUT"));
         event.setTaskId(run.getTaskId());
         event.setRunId(run.getId());
-        event.setStepId(resolveCurrentStepId(run.getTaskId(), run.getCurrentStepNo()));
-        event.setStatus("FAIL");
+        event.setStepInstanceId(resolveCurrentStepId(run.getTaskId(), run.getCurrentStepNo()));
+        event.setEventStatus("FAIL");
         event.setOccurredAt(LocalDateTime.now());
         event.setErrorCode("STEP_EXEC_TIMEOUT");
         event.setErrorMessage("执行超时");
-        event.setSensitiveScreenDetected(0);
+        event.setIsSensitiveScreen(0);
         runEventMapper.insert(event);
         Map<String, Object> detail = new HashMap<>();
         detail.put("runId", run.getId());
@@ -183,11 +232,11 @@ public class TaskWorker {
         int fail = 0;
         int running = 0;
         for (TaskDeviceRun run : runs) {
-            if ("SUCCESS".equals(run.getStatus())) {
+            if ("SUCCESS".equals(run.getRunStatus())) {
                 success++;
-            } else if ("FAIL".equals(run.getStatus())) {
+            } else if ("FAIL".equals(run.getRunStatus())) {
                 fail++;
-            } else if ("RUNNING".equals(run.getStatus())) {
+            } else if ("RUNNING".equals(run.getRunStatus())) {
                 running++;
             }
         }
@@ -219,6 +268,31 @@ public class TaskWorker {
             return stepProperties.getDefaultTimeoutMs();
         }
         return step.getTimeoutMs();
+    }
+
+    private int resolveStepRetryMax(Long taskId, Integer currentStepNo) {
+        StepInstance step = resolveStep(taskId, currentStepNo);
+        if (step == null || step.getRetryMax() == null || step.getRetryMax() < 0) {
+            return stepProperties.getMaxRetryDefault();
+        }
+        return step.getRetryMax();
+    }
+
+    private int resolveStepRetryBackoffMs(Long taskId, Integer currentStepNo) {
+        StepInstance step = resolveStep(taskId, currentStepNo);
+        if (step == null || step.getRetryBackoffMs() == null || step.getRetryBackoffMs() < 0) {
+            return stepProperties.getDefaultBackoffMs();
+        }
+        return step.getRetryBackoffMs();
+    }
+
+    private StepInstance resolveStep(Long taskId, Integer currentStepNo) {
+        Integer stepNo = currentStepNo == null || currentStepNo <= 0 ? 1 : currentStepNo;
+        LambdaQueryWrapper<StepInstance> query = new LambdaQueryWrapper<>();
+        query.eq(StepInstance::getTaskId, taskId)
+                .eq(StepInstance::getStepNo, stepNo)
+                .last("LIMIT 1");
+        return stepInstanceMapper.selectOne(query);
     }
 
     private Long resolveCurrentStepId(Long taskId, Integer currentStepNo) {

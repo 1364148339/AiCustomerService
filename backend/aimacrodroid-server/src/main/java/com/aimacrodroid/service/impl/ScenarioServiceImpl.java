@@ -12,6 +12,8 @@ import com.aimacrodroid.mapper.ScenarioStepMapper;
 import com.aimacrodroid.service.AuditLogService;
 import com.aimacrodroid.service.ScenarioService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -70,9 +72,7 @@ public class ScenarioServiceImpl extends ServiceImpl<ScenarioDefinitionMapper, S
             throw new BizException("SCENARIO_STEPS_EMPTY", "至少需要一个启用步骤");
         }
 
-        LambdaQueryWrapper<ScenarioStep> removeQuery = new LambdaQueryWrapper<>();
-        removeQuery.eq(ScenarioStep::getScenarioId, scenario.getId());
-        scenarioStepMapper.delete(removeQuery);
+        scenarioStepMapper.purgeByScenarioId(scenario.getId());
 
         for (ScenarioStepItemDTO item : normalized) {
             ScenarioStep step = new ScenarioStep();
@@ -91,10 +91,27 @@ public class ScenarioServiceImpl extends ServiceImpl<ScenarioDefinitionMapper, S
     }
 
     @Override
-    public List<ScenarioDefinition> listScenarios() {
+    @Transactional(rollbackFor = Exception.class)
+    public ScenarioDefinition publishScenario(String scenarioKey) {
+        ScenarioDefinition scenario = getByKey(scenarioKey);
+        LambdaQueryWrapper<ScenarioStep> stepQuery = new LambdaQueryWrapper<>();
+        stepQuery.eq(ScenarioStep::getScenarioId, scenario.getId()).eq(ScenarioStep::getIsEnabled, 1);
+        Long enabledStepCount = scenarioStepMapper.selectCount(stepQuery);
+        if (enabledStepCount == null || enabledStepCount < 1) {
+            throw new BizException("SCENARIO_STEPS_EMPTY", "至少需要一个启用步骤后才能发布");
+        }
+        scenario.setStatus("ACTIVE");
+        scenario.setVersionNo((scenario.getVersionNo() == null ? 0 : scenario.getVersionNo()) + 1);
+        this.updateById(scenario);
+        auditLogService.record("system", "SCENARIO_PUBLISH", "SCENARIO", String.valueOf(scenario.getId()), "SUCCESS", new HashMap<>());
+        return scenario;
+    }
+
+    @Override
+    public IPage<ScenarioDefinition> listScenarios(long pageNo, long pageSize) {
         LambdaQueryWrapper<ScenarioDefinition> query = new LambdaQueryWrapper<>();
         query.orderByDesc(ScenarioDefinition::getGmtCreate);
-        return this.list(query);
+        return this.page(new Page<>(pageNo, pageSize), query);
     }
 
     private ScenarioDefinition getByKey(String scenarioKey) {

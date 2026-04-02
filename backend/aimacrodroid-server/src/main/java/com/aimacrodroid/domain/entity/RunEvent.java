@@ -8,6 +8,7 @@ import lombok.EqualsAndHashCode;
 
 import java.util.List;
 import java.util.Map;
+import org.apache.ibatis.type.JdbcType;
 
 /**
  * 任务执行事件时间线流表
@@ -18,7 +19,6 @@ import java.util.Map;
 public class RunEvent extends BaseEntity {
     private String eventNo;
 
-    @TableField("run_id")
     private Long runId;
 
     /**
@@ -29,8 +29,7 @@ public class RunEvent extends BaseEntity {
     /**
      * 步骤ID
      */
-    @TableField("step_instance_id")
-    private Long stepId;
+    private Long stepInstanceId;
 
     /**
      * 设备标识
@@ -47,8 +46,7 @@ public class RunEvent extends BaseEntity {
     /**
      * 事件节点状态(RUNNING/SUCCESS/FAIL)
      */
-    @TableField("event_status")
-    private String status;
+    private String eventStatus;
 
     /**
      * 设备端实际上报时间戳(毫秒)
@@ -71,26 +69,24 @@ public class RunEvent extends BaseEntity {
     /**
      * 轨迹数据摘要
      */
-    @TableField(value = "trace_json", typeHandler = JacksonTypeHandler.class)
-    private List<Map<String, Object>> trace;
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
+    private List<Map<String, Object>> traceJson;
 
     /**
      * 大模型意图思考过程摘要
      */
-    @TableField("thinking_text")
-    private String thinking;
+    private String thinkingText;
 
     /**
      * 是否触发敏感页面保护(0:否 1:是)
      */
-    @TableField("is_sensitive_screen")
-    private Integer sensitiveScreenDetected;
+    private Integer isSensitiveScreen;
 
     /**
      * 本节点的进度数据快照
      */
-    @TableField(value = "progress_json", typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> progress;
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
+    private Map<String, Object> progressJson;
 
     private String screenshotUrl;
 

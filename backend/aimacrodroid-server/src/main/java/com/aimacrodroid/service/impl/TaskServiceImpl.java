@@ -73,7 +73,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setScenarioName(scenario.getScenarioName());
         task.setPriority(req.getPriority());
         task.setStatus("QUEUED");
-        task.setConstraints(req.getConstraints());
+        task.setTaskConstraints(req.getConstraints());
         task.setObservability(req.getObservability());
         task.setTotalDeviceCount(req.getDevices().size());
         task.setSuccessDeviceCount(0);
@@ -87,7 +87,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             TaskDeviceRun run = new TaskDeviceRun();
             run.setTaskId(task.getId());
             run.setDeviceId(device.getId());
-            run.setStatus("PENDING");
+            run.setRunStatus("PENDING");
             run.setRetryCount(0);
             runs.add(run);
         }
@@ -142,12 +142,16 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         stats.put("running", 0);
         stats.put("fail", 0);
         stats.put("pending", 0);
+        stats.put("canceled", 0);
         for (TaskDeviceRun run : deviceRuns) {
-            String status = run.getStatus();
+            String status = run.getRunStatus();
             if ("SUCCESS".equals(status)) {
                 stats.put("success", stats.get("success") + 1);
             } else if ("FAIL".equals(status)) {
                 stats.put("fail", stats.get("fail") + 1);
+                if ("TASK_CANCELED".equals(run.getErrorCode())) {
+                    stats.put("canceled", stats.get("canceled") + 1);
+                }
             } else if ("RUNNING".equals(status)) {
                 stats.put("running", stats.get("running") + 1);
             } else {
@@ -163,9 +167,41 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 .build();
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void cancelTask(Long taskId, String reason) {
+        Task task = this.getById(taskId);
+        if (task == null) {
+            throw new BizException("TASK_NOT_FOUND", "任务不存在");
+        }
+        if ("SUCCESS".equals(task.getStatus()) || "FAIL".equals(task.getStatus()) || "CANCELED".equals(task.getStatus())) {
+            return;
+        }
+        LambdaQueryWrapper<TaskDeviceRun> runQuery = new LambdaQueryWrapper<>();
+        runQuery.eq(TaskDeviceRun::getTaskId, taskId);
+        List<TaskDeviceRun> runs = taskDeviceRunMapper.selectList(runQuery);
+        for (TaskDeviceRun run : runs) {
+            if ("SUCCESS".equals(run.getRunStatus()) || "FAIL".equals(run.getRunStatus())) {
+                continue;
+            }
+            run.setRunStatus("FAIL");
+            run.setErrorCode("TASK_CANCELED");
+            run.setErrorMessage(reason == null || reason.isBlank() ? "任务已取消" : reason);
+            run.setFinishedAt(java.time.LocalDateTime.now());
+            taskDeviceRunMapper.updateById(run);
+        }
+        task.setStatus("CANCELED");
+        task.setFinishedAt(java.time.LocalDateTime.now());
+        this.updateById(task);
+        HashMap<String, Object> detail = new HashMap<>();
+        detail.put("reason", reason);
+        detail.put("taskId", taskId);
+        auditLogService.record("system", "TASK_CANCEL", "TASK", String.valueOf(taskId), "SUCCESS", detail);
+    }
+
     private Device getByDeviceCode(String deviceCode) {
         LambdaQueryWrapper<Device> query = new LambdaQueryWrapper<>();
-        query.eq(Device::getDeviceId, deviceCode).last("LIMIT 1");
+        query.eq(Device::getDeviceCode, deviceCode).last("LIMIT 1");
         Device device = deviceMapper.selectOne(query);
         if (device == null) {
             throw new BizException("DEVICE_NOT_FOUND", "设备不存在: " + deviceCode);

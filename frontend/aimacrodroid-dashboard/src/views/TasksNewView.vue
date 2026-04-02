@@ -24,7 +24,7 @@ const form = ref({
 })
 
 const deviceOptions = computed(() => devicesStore.list)
-const scenarioOptions = computed(() => scenariosStore.list)
+const scenarioOptions = computed(() => scenariosStore.list.filter((item) => item.status === 'ACTIVE'))
 const selectedScenario = computed(() =>
   scenarioOptions.value.find((item) => item.scenarioKey === form.value.scenarioKey) || null
 )

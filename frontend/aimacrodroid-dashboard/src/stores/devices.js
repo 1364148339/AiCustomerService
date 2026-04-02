@@ -2,9 +2,6 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { createTask, getDevices } from '../mock/api'
 import { useAppStore } from './app'
-import { createPagePolling } from '../utils/polling'
-
-const POLL_INTERVAL = 3000
 
 export const useDevicesStore = defineStore('devices', () => {
   const appStore = useAppStore()
@@ -15,7 +12,6 @@ export const useDevicesStore = defineStore('devices', () => {
     online: 'ALL',
     brand: ''
   })
-  const poller = createPagePolling(refresh, POLL_INTERVAL)
 
   const filteredList = computed(() =>
     list.value.filter((item) => {
@@ -43,7 +39,7 @@ export const useDevicesStore = defineStore('devices', () => {
       appStore.setOverview({
         onlineCount: response.overview.onlineCount,
         totalCount: response.devices.length,
-        runningCount: appStore.taskRunningCount,
+        runningCount: response.overview.runningCount,
         openAlertCount: appStore.alertOpenCount
       })
     } finally {
@@ -65,22 +61,12 @@ export const useDevicesStore = defineStore('devices', () => {
     })
   }
 
-  function startPolling() {
-    poller.start()
-  }
-
-  function stopPolling() {
-    poller.stop()
-  }
-
   return {
     list,
     filteredList,
     loading,
     filters,
     refresh,
-    startPolling,
-    stopPolling,
     dispatchReadinessHint
   }
 })

@@ -16,4 +16,6 @@ public interface TaskService extends IService<Task> {
      * 获取任务详情（包含执行状态及指令序列）
      */
     TaskDetailVO getTaskDetail(Long taskId);
+
+    void cancelTask(Long taskId, String reason);
 }

@@ -242,6 +242,7 @@ class TaskFragment : Fragment() {
             return
         }
         AiMacrodroidService.stop(requireContext())
+        TokenManager.getInstance(requireContext()).clearToken()
         AiMacrodroidService.start(requireContext())
         Toast.makeText(requireContext(), "正在重新连接...", Toast.LENGTH_SHORT).show()
     }

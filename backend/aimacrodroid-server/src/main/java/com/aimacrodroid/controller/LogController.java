@@ -2,6 +2,8 @@ package com.aimacrodroid.controller;
 
 import com.aimacrodroid.common.api.Result;
 import com.aimacrodroid.domain.entity.RunEvent;
+import com.aimacrodroid.security.OperatorRole;
+import com.aimacrodroid.security.RequireRoles;
 import com.aimacrodroid.service.RunEventService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -22,6 +24,7 @@ public class LogController {
 
     @Operation(summary = "按任务与设备查询日志")
     @GetMapping
+    @RequireRoles({OperatorRole.ADMIN, OperatorRole.OPS, OperatorRole.READONLY})
     public Result<List<RunEvent>> queryLogs(@RequestParam(value = "taskId", required = false) Long taskId,
                                             @RequestParam(value = "deviceId", required = false) String deviceId) {
         return Result.success(runEventService.queryLogs(taskId, deviceId));

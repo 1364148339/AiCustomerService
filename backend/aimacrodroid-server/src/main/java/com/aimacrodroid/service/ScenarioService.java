@@ -4,9 +4,8 @@ import com.aimacrodroid.domain.dto.ScenarioCreateReqDTO;
 import com.aimacrodroid.domain.dto.ScenarioStepsUpdateReqDTO;
 import com.aimacrodroid.domain.entity.ScenarioDefinition;
 import com.aimacrodroid.domain.vo.ScenarioDetailVO;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
-
-import java.util.List;
 
 public interface ScenarioService extends IService<ScenarioDefinition> {
 
@@ -16,5 +15,7 @@ public interface ScenarioService extends IService<ScenarioDefinition> {
 
     void saveSteps(String scenarioKey, ScenarioStepsUpdateReqDTO req);
 
-    List<ScenarioDefinition> listScenarios();
+    ScenarioDefinition publishScenario(String scenarioKey);
+
+    IPage<ScenarioDefinition> listScenarios(long pageNo, long pageSize);
 }

@@ -1,5 +1,6 @@
 package com.aimacrodroid.service.impl;
 
+import com.aimacrodroid.common.exception.BizException;
 import com.aimacrodroid.domain.entity.Alert;
 import com.aimacrodroid.mapper.AlertMapper;
 import com.aimacrodroid.service.AlertService;
@@ -21,7 +22,7 @@ public class AlertServiceImpl extends ServiceImpl<AlertMapper, Alert> implements
                 .eq(Alert::getRunId, runId)
                 .eq(Alert::getAlertType, alertType)
                 .eq(Alert::getErrorCode, alertKey)
-                .eq(Alert::getStatus, "OPEN")
+                .eq(Alert::getAlertStatus, "OPEN")
                 .orderByDesc(Alert::getId)
                 .last("LIMIT 1");
         Alert existing = this.getOne(query, false);
@@ -31,19 +32,19 @@ public class AlertServiceImpl extends ServiceImpl<AlertMapper, Alert> implements
             alert.setAlertNo("AL-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase());
             alert.setTaskId(taskId);
             alert.setRunId(runId);
-            alert.setLevel(level);
+            alert.setAlertLevel(level);
             alert.setAlertType(alertType);
             alert.setErrorCode(alertKey);
-            alert.setStatus("OPEN");
+            alert.setAlertStatus("OPEN");
             alert.setFirstOccurAt(now);
             alert.setLastOccurAt(now);
-            alert.setDetail(detail);
+            alert.setDetailJson(detail);
             this.save(alert);
             return;
         }
         existing.setLastOccurAt(now);
         if (detail != null) {
-            existing.setDetail(detail);
+            existing.setDetailJson(detail);
         }
         this.updateById(existing);
     }
@@ -56,5 +57,29 @@ public class AlertServiceImpl extends ServiceImpl<AlertMapper, Alert> implements
         }
         query.orderByDesc(Alert::getLastOccurAt).orderByDesc(Alert::getId);
         return this.list(query);
+    }
+
+    @Override
+    public void ackAlert(Long alertId) {
+        Alert alert = this.getById(alertId);
+        if (alert == null) {
+            throw new BizException("INVALID_PARAM", "告警不存在");
+        }
+        if ("CLOSED".equals(alert.getAlertStatus())) {
+            return;
+        }
+        alert.setAlertStatus("ACK");
+        this.updateById(alert);
+    }
+
+    @Override
+    public void closeAlert(Long alertId, String reason) {
+        Alert alert = this.getById(alertId);
+        if (alert == null) {
+            throw new BizException("INVALID_PARAM", "告警不存在");
+        }
+        alert.setAlertStatus("CLOSED");
+        alert.setCloseReason(reason);
+        this.updateById(alert);
     }
 }

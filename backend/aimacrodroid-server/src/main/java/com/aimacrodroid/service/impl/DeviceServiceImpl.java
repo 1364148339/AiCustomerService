@@ -54,19 +54,18 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         Device existingDevice = getByDeviceCode(req.getDeviceId());
         String token = UUID.randomUUID().toString().replace("-", "");
         String tokenHash = sha256(token);
-        token = tokenHash;
         Device current;
         if (existingDevice == null) {
             current = new Device();
-            current.setDeviceId(req.getDeviceId());
+            current.setDeviceCode(req.getDeviceId());
             current.setBrand(req.getBrand());
             current.setModel(req.getModel());
             current.setAndroidVersion(req.getAndroidVersion());
             current.setResolution(req.getResolution());
-            current.setCapabilities(normalizeCapabilitiesForStorage(req.getCapabilities()));
-            current.setStatus("ONLINE");
-            current.setToken(tokenHash);
-            current.setLastHeartbeatTime(LocalDateTime.now());
+            current.setCapabilityJson(normalizeCapabilitiesForStorage(req.getCapabilities()));
+            current.setDeviceStatus("ONLINE");
+            current.setTokenHash(tokenHash);
+            current.setLastSeenAt(LocalDateTime.now());
             this.save(current);
             current = getByDeviceCode(req.getDeviceId());
         } else {
@@ -75,10 +74,10 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
             current.setModel(req.getModel());
             current.setAndroidVersion(req.getAndroidVersion());
             current.setResolution(req.getResolution());
-            current.setCapabilities(normalizeCapabilitiesForStorage(req.getCapabilities()));
-            current.setStatus("ONLINE");
-            current.setToken(tokenHash);
-            current.setLastHeartbeatTime(LocalDateTime.now());
+            current.setCapabilityJson(normalizeCapabilitiesForStorage(req.getCapabilities()));
+            current.setDeviceStatus("ONLINE");
+            current.setTokenHash(tokenHash);
+            current.setLastSeenAt(LocalDateTime.now());
             this.updateById(current);
         }
         upsertReadiness(current.getId(), req.getShizukuAvailable(), req.getOverlayGranted(), req.getKeyboardEnabled(), req.getSseSupported(), null, null, null, null);
@@ -98,10 +97,10 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
             throw new BizException("DEVICE_NOT_FOUND", "设备未注册");
         }
         if (req.getCapabilities() != null) {
-            device.setCapabilities(normalizeCapabilitiesForStorage(req.getCapabilities()));
+            device.setCapabilityJson(normalizeCapabilitiesForStorage(req.getCapabilities()));
         }
-        device.setLastHeartbeatTime(LocalDateTime.now());
-        device.setStatus("ONLINE");
+        device.setLastSeenAt(LocalDateTime.now());
+        device.setDeviceStatus("ONLINE");
         this.updateById(device);
         upsertReadiness(device.getId(), req.getShizukuAvailable(), req.getOverlayGranted(), req.getKeyboardEnabled(), req.getSseSupported(),
                 req.getForegroundPkg(), req.getBatteryPct(), req.getNetworkType(), req.getCharging());
@@ -114,21 +113,21 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         if (device == null) {
             throw new BizException("DEVICE_NOT_FOUND", "设备不存在");
         }
-        String status = device.getStatus();
-        if ("ONLINE".equals(status) && device.getLastHeartbeatTime() != null && device.getLastHeartbeatTime().plusMinutes(3).isBefore(LocalDateTime.now())) {
+        String status = device.getDeviceStatus();
+        if ("ONLINE".equals(status) && device.getLastSeenAt() != null && device.getLastSeenAt().plusMinutes(3).isBefore(LocalDateTime.now())) {
             status = "OFFLINE";
-            device.setStatus("OFFLINE");
+            device.setDeviceStatus("OFFLINE");
             this.updateById(device);
         }
         DeviceReadiness readiness = getLatestReadiness(device.getId());
         return DeviceStatusVO.builder()
                 .status(status)
-                .lastHeartbeatTime(device.getLastHeartbeatTime())
+                .lastHeartbeatTime(device.getLastSeenAt())
                 .foregroundPkg(readiness == null ? null : readiness.getForegroundPkg())
-                .capabilities(device.getCapabilities())
-                .shizukuAvailable(readiness == null ? 0 : readiness.getShizukuRunning())
-                .overlayGranted(readiness == null ? 0 : readiness.getOverlayGranted())
-                .keyboardEnabled(readiness == null ? 0 : readiness.getKeyboardEnabled())
+                .capabilities(device.getCapabilityJson())
+                .shizukuAvailable(readiness == null ? 0 : readiness.getIsShizukuAvailable())
+                .overlayGranted(readiness == null ? 0 : readiness.getIsOverlayGranted())
+                .keyboardEnabled(readiness == null ? 0 : readiness.getIsKeyboardEnabled())
                 .build();
     }
 
@@ -148,10 +147,10 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
                     .build();
         }
         return DeviceReadinessVO.builder()
-                .shizukuRunning(readiness.getShizukuRunning())
-                .overlayGranted(readiness.getOverlayGranted())
-                .keyboardEnabled(readiness.getKeyboardEnabled())
-                .lastActivationMethod(readiness.getLastActivationMethod())
+                .shizukuRunning(readiness.getIsShizukuAvailable())
+                .overlayGranted(readiness.getIsOverlayGranted())
+                .keyboardEnabled(readiness.getIsKeyboardEnabled())
+                .lastActivationMethod("unknown")
                 .build();
     }
 
@@ -183,7 +182,7 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
             if (task == null) {
                 continue;
             }
-            List<Map<String, Object>> steps = stepMap.get(task.getId());
+            List<Map<String, Object>> steps = pickCurrentStep(stepMap.get(task.getId()), run.getCurrentStepNo());
             result.add(DeviceTaskVO.builder()
                     .id(String.valueOf(task.getId()))
                     .scenarioKey(task.getScenarioKey())
@@ -191,7 +190,7 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
                     .track("atomic")
                     .steps(steps)
                     .commands(steps)
-                    .constraints(task.getConstraints())
+                    .constraints(task.getTaskConstraints())
                     .observability(task.getObservability())
                     .priority(task.getPriority() == null ? 0 : task.getPriority())
                     .build());
@@ -200,10 +199,41 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         return result;
     }
 
+    private List<Map<String, Object>> pickCurrentStep(List<Map<String, Object>> steps, Integer currentStepNo) {
+        if (steps == null || steps.isEmpty()) {
+            return Collections.emptyList();
+        }
+        int stepNo = (currentStepNo == null || currentStepNo <= 0) ? 1 : currentStepNo;
+        for (Map<String, Object> step : steps) {
+            if (extractStepNo(step) == stepNo) {
+                return List.of(step);
+            }
+        }
+        return List.of(steps.get(0));
+    }
+
+    private int extractStepNo(Map<String, Object> step) {
+        if (step == null) {
+            return 0;
+        }
+        Object value = step.get("stepNo");
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String s) {
+            try {
+                return Integer.parseInt(s);
+            } catch (Exception ignored) {
+                return 0;
+            }
+        }
+        return 0;
+    }
+
     private List<TaskDeviceRun> queryDeviceRuns(Long devicePkId, String status) {
         LambdaQueryWrapper<TaskDeviceRun> runQuery = new LambdaQueryWrapper<>();
         runQuery.eq(TaskDeviceRun::getDeviceId, devicePkId)
-                .eq(TaskDeviceRun::getStatus, status)
+                .eq(TaskDeviceRun::getRunStatus, status)
                 .orderByAsc(TaskDeviceRun::getGmtCreate);
         return taskDeviceRunMapper.selectList(runQuery);
     }
@@ -230,16 +260,16 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
             readiness.setIsCharging(toIntFlag(charging));
         }
         if (shizuku != null) {
-            readiness.setShizukuRunning(toIntFlag(shizuku));
+            readiness.setIsShizukuAvailable(toIntFlag(shizuku));
         }
         if (overlay != null) {
-            readiness.setOverlayGranted(toIntFlag(overlay));
+            readiness.setIsOverlayGranted(toIntFlag(overlay));
         }
         if (keyboard != null) {
-            readiness.setKeyboardEnabled(toIntFlag(keyboard));
+            readiness.setIsKeyboardEnabled(toIntFlag(keyboard));
         }
         if (sse != null) {
-            readiness.setSseSupported(toIntFlag(sse));
+            readiness.setIsSseSupported(toIntFlag(sse));
         }
         readiness.setHeartbeatAt(LocalDateTime.now());
         if (readiness.getId() == null) {
@@ -251,7 +281,7 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
 
     private Device getByDeviceCode(String deviceCode) {
         LambdaQueryWrapper<Device> query = new LambdaQueryWrapper<>();
-        query.eq(Device::getDeviceId, deviceCode).last("LIMIT 1");
+        query.eq(Device::getDeviceCode, deviceCode).last("LIMIT 1");
         return this.getOne(query, false);
     }
 
