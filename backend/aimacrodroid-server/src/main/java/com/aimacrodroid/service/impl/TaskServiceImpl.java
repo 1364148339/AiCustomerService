@@ -29,7 +29,10 @@ import org.springframework.util.CollectionUtils;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -131,6 +134,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         LambdaQueryWrapper<TaskDeviceRun> runQuery = new LambdaQueryWrapper<>();
         runQuery.eq(TaskDeviceRun::getTaskId, taskId).orderByAsc(TaskDeviceRun::getId);
         List<TaskDeviceRun> deviceRuns = taskDeviceRunMapper.selectList(runQuery);
+        Set<Long> deviceIds = deviceRuns.stream()
+                .map(TaskDeviceRun::getDeviceId)
+                .collect(Collectors.toSet());
+        if (!deviceIds.isEmpty()) {
+            LambdaQueryWrapper<Device> deviceQuery = new LambdaQueryWrapper<>();
+            deviceQuery.in(Device::getId, deviceIds);
+            List<Device> devices = deviceMapper.selectList(deviceQuery);
+            Map<Long, String> deviceCodeMap = devices.stream()
+                    .collect(Collectors.toMap(Device::getId, Device::getDeviceCode));
+            for (TaskDeviceRun run : deviceRuns) {
+                run.setDeviceCode(deviceCodeMap.getOrDefault(run.getDeviceId(), String.valueOf(run.getDeviceId())));
+            }
+        }
 
         LambdaQueryWrapper<StepInstance> stepQuery = new LambdaQueryWrapper<>();
         stepQuery.eq(StepInstance::getTaskId, taskId).orderByAsc(StepInstance::getStepNo);

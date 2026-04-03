@@ -5,6 +5,7 @@ import com.aimacrodroid.domain.dto.DeviceHeartbeatReqDTO;
 import com.aimacrodroid.domain.dto.DeviceRegisterReqDTO;
 import com.aimacrodroid.domain.entity.Device;
 import com.aimacrodroid.domain.entity.DeviceReadiness;
+import com.aimacrodroid.domain.entity.RunEvent;
 import com.aimacrodroid.domain.entity.StepInstance;
 import com.aimacrodroid.domain.entity.Task;
 import com.aimacrodroid.domain.entity.TaskDeviceRun;
@@ -14,6 +15,7 @@ import com.aimacrodroid.domain.vo.DeviceStatusVO;
 import com.aimacrodroid.domain.vo.DeviceTaskVO;
 import com.aimacrodroid.mapper.DeviceMapper;
 import com.aimacrodroid.mapper.DeviceReadinessMapper;
+import com.aimacrodroid.mapper.RunEventMapper;
 import com.aimacrodroid.mapper.StepInstanceMapper;
 import com.aimacrodroid.mapper.TaskDeviceRunMapper;
 import com.aimacrodroid.mapper.TaskMapper;
@@ -46,6 +48,7 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
     private final TaskDeviceRunMapper taskDeviceRunMapper;
     private final TaskMapper taskMapper;
     private final StepInstanceMapper stepInstanceMapper;
+    private final RunEventMapper runEventMapper;
     private final AuditLogService auditLogService;
 
     @Override
@@ -182,7 +185,8 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
             if (task == null) {
                 continue;
             }
-            List<Map<String, Object>> steps = pickCurrentStep(stepMap.get(task.getId()), run.getCurrentStepNo());
+            markRunAckIfNeeded(deviceId, run);
+            List<Map<String, Object>> steps = pickPendingSteps(stepMap.get(task.getId()), run.getCurrentStepNo());
             result.add(DeviceTaskVO.builder()
                     .id(String.valueOf(task.getId()))
                     .scenarioKey(task.getScenarioKey())
@@ -199,17 +203,64 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         return result;
     }
 
-    private List<Map<String, Object>> pickCurrentStep(List<Map<String, Object>> steps, Integer currentStepNo) {
+    private void markRunAckIfNeeded(String deviceCode, TaskDeviceRun run) {
+        String ackEventNo = "ACK-" + run.getId();
+        LambdaQueryWrapper<RunEvent> ackQuery = new LambdaQueryWrapper<>();
+        ackQuery.eq(RunEvent::getEventNo, ackEventNo)
+                .last("LIMIT 1");
+        if (runEventMapper.selectOne(ackQuery) != null) {
+            return;
+        }
+        if ("PENDING".equals(run.getRunStatus())) {
+            run.setRunStatus("RUNNING");
+            if (run.getStartedAt() == null) {
+                run.setStartedAt(LocalDateTime.now());
+            }
+            if (run.getCurrentStepNo() == null) {
+                run.setCurrentStepNo(1);
+            }
+            taskDeviceRunMapper.updateById(run);
+        }
+        RunEvent event = new RunEvent();
+        event.setEventNo(ackEventNo);
+        event.setTaskId(run.getTaskId());
+        event.setRunId(run.getId());
+        event.setStepInstanceId(resolveCurrentStepId(run.getTaskId(), run.getCurrentStepNo()));
+        event.setEventStatus("RUNNING");
+        event.setErrorMessage("设备确认开始执行");
+        HashMap<String, Object> progress = new HashMap<>();
+        progress.put("source", "DEVICE_TASK_ACKED");
+        progress.put("deviceId", deviceCode);
+        event.setProgressJson(progress);
+        event.setOccurredAt(LocalDateTime.now());
+        runEventMapper.insert(event);
+        Task task = taskMapper.selectById(run.getTaskId());
+        if (task != null && !"CANCELED".equals(task.getStatus()) && !"SUCCESS".equals(task.getStatus()) && !"FAIL".equals(task.getStatus())) {
+            if (task.getStartedAt() == null) {
+                task.setStartedAt(LocalDateTime.now());
+            }
+            task.setStatus("RUNNING");
+            taskMapper.updateById(task);
+        }
+        HashMap<String, Object> detail = new HashMap<>();
+        detail.put("taskId", run.getTaskId());
+        detail.put("runId", run.getId());
+        detail.put("deviceId", deviceCode);
+        auditLogService.record(deviceCode, "DEVICE_TASK_ACK", "TASK_DEVICE_RUN", String.valueOf(run.getId()), "SUCCESS", detail);
+    }
+
+    private List<Map<String, Object>> pickPendingSteps(List<Map<String, Object>> steps, Integer currentStepNo) {
         if (steps == null || steps.isEmpty()) {
             return Collections.emptyList();
         }
         int stepNo = (currentStepNo == null || currentStepNo <= 0) ? 1 : currentStepNo;
-        for (Map<String, Object> step : steps) {
-            if (extractStepNo(step) == stepNo) {
-                return List.of(step);
-            }
+        List<Map<String, Object>> pending = steps.stream()
+                .filter(step -> extractStepNo(step) >= stepNo)
+                .collect(Collectors.toList());
+        if (!pending.isEmpty()) {
+            return pending;
         }
-        return List.of(steps.get(0));
+        return steps;
     }
 
     private int extractStepNo(Map<String, Object> step) {
@@ -236,6 +287,16 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
                 .eq(TaskDeviceRun::getRunStatus, status)
                 .orderByAsc(TaskDeviceRun::getGmtCreate);
         return taskDeviceRunMapper.selectList(runQuery);
+    }
+
+    private Long resolveCurrentStepId(Long taskId, Integer currentStepNo) {
+        int stepNo = (currentStepNo == null || currentStepNo <= 0) ? 1 : currentStepNo;
+        LambdaQueryWrapper<StepInstance> query = new LambdaQueryWrapper<>();
+        query.eq(StepInstance::getTaskId, taskId)
+                .eq(StepInstance::getStepNo, stepNo)
+                .last("LIMIT 1");
+        StepInstance step = stepInstanceMapper.selectOne(query);
+        return step == null ? null : step.getId();
     }
 
     private void upsertReadiness(Long devicePkId, Object shizuku, Object overlay, Object keyboard, Object sse, String foregroundPkg,

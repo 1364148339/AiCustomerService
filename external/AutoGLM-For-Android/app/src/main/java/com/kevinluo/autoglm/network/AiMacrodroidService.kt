@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -53,6 +55,7 @@ private data class RemoteTaskRuntime(
     var stepStartedAt: Long? = null,
     var latestThinking: String? = null,
     var latestScreenshot: String? = null,
+    var lastUploadedScreenshotDigest: String? = null,
     var guardCancelled: Boolean = false,
     var guardCancelReason: String? = null,
 )
@@ -86,6 +89,8 @@ class AiMacrodroidService : Service() {
 
         private val _currentRemoteTask = MutableStateFlow<String?>(null)
         val currentRemoteTask: StateFlow<String?> = _currentRemoteTask.asStateFlow()
+        private val _pendingRemoteTasks = MutableStateFlow<List<TaskDto>>(emptyList())
+        val pendingRemoteTasks: StateFlow<List<TaskDto>> = _pendingRemoteTasks.asStateFlow()
 
         fun start(context: Context) {
             val intent = Intent(context, AiMacrodroidService::class.java)
@@ -100,6 +105,7 @@ class AiMacrodroidService : Service() {
             context.stopService(Intent(context, AiMacrodroidService::class.java))
             _connectionState.value = ConnectionState.DISCONNECTED
             _currentRemoteTask.value = null
+            _pendingRemoteTasks.value = emptyList()
         }
     }
 
@@ -113,6 +119,7 @@ class AiMacrodroidService : Service() {
     private var observeJob: Job? = null
     private var retryJob: Job? = null
     private var guardJob: Job? = null
+    private var pollPausedByTask = false
 
     override fun onCreate() {
         super.onCreate()
@@ -184,6 +191,10 @@ class AiMacrodroidService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Logger.i(TAG, "AiMacrodroidService destroyed")
+        synchronized(runtimeLock) {
+            pollPausedByTask = false
+        }
+        _pendingRemoteTasks.value = emptyList()
         serviceScope.cancel()
     }
 
@@ -302,15 +313,21 @@ class AiMacrodroidService : Service() {
                 val hasInFlightTask = synchronized(runtimeLock) {
                     _currentRemoteTask.value != null || taskRuntimeMap.isNotEmpty()
                 }
-                if (hasInFlightTask) {
+                val pausedByTask = synchronized(runtimeLock) { pollPausedByTask }
+                if (hasInFlightTask || pausedByTask) {
                     Logger.d(TAG, "Remote task in-flight, skipping poll")
                 } else if (taskExecutionManager.canStartTask()) {
                     Logger.d(TAG, "Polling for tasks...")
                     val tasks = AiMacrodroidApiClient.getInstance(this).api.pollTasks(deviceManager.deviceId).data.orEmpty()
+                    _pendingRemoteTasks.value = tasks
                     if (tasks.isNotEmpty()) {
                         Logger.i(TAG, "Received ${tasks.size} tasks")
                         val taskToExecute = tasks.firstOrNull()
                         if (taskToExecute != null) {
+                            synchronized(runtimeLock) {
+                                pollPausedByTask = true
+                            }
+                            _pendingRemoteTasks.value = tasks.filterNot { it.id == taskToExecute.id }
                             executeRemoteTask(taskToExecute, taskExecutionManager)
                         }
                     }
@@ -319,6 +336,7 @@ class AiMacrodroidService : Service() {
                 }
             } catch (e: Exception) {
                 Logger.e(TAG, "Task polling failed", e)
+                _pendingRemoteTasks.value = emptyList()
             }
 
             delay(POLL_TASK_INTERVAL_MS)
@@ -329,6 +347,9 @@ class AiMacrodroidService : Service() {
         Logger.i(TAG, "Executing remote task: ${taskDto.id} (track: ${taskDto.track})")
         val description = buildTaskDescription(taskDto)
         if (description.isNullOrBlank()) {
+            synchronized(runtimeLock) {
+                pollPausedByTask = false
+            }
             serviceScope.launch {
                 reportSyntheticFail(taskDto.id, "STEP_PARAM_INVALID", "Task description is empty")
             }
@@ -404,6 +425,7 @@ class AiMacrodroidService : Service() {
         runtime.stepStartedAt = null
         runtime.latestThinking = null
         runtime.latestScreenshot = null
+        runtime.lastUploadedScreenshotDigest = null
         runtime.guardCancelled = false
         runtime.guardCancelReason = null
         val started = taskExecutionManager.startTask(runtime.description, runtime.taskId)
@@ -414,6 +436,7 @@ class AiMacrodroidService : Service() {
             }
             synchronized(runtimeLock) {
                 taskRuntimeMap.remove(runtime.taskId)
+                pollPausedByTask = false
             }
             _currentRemoteTask.value = null
         }
@@ -458,7 +481,7 @@ class AiMacrodroidService : Service() {
                 runtime?.attemptStartedAt?.let { System.currentTimeMillis() - it }
             } else null
             val commandId = runtime?.currentStepNo?.toString()
-            val screenshotUrl = runtime?.latestScreenshot
+            val screenshotUrl = runtime?.let { resolveScreenshotUrlForUpload(it) }
             val thinking = runtime?.latestThinking
             val progress = buildJsonObject {
                 put("attempt", runtime?.attempt ?: 1)
@@ -472,6 +495,7 @@ class AiMacrodroidService : Service() {
                 }
             )
             val req = EventReq(
+                eventNo = generateEventNo(event.taskId, event.timestamp),
                 taskId = taskIdLong,
                 commandId = commandId,
                 status = status,
@@ -479,6 +503,7 @@ class AiMacrodroidService : Service() {
                 durationMs = durationMs,
                 screenshotUrl = screenshotUrl,
                 errorCode = errorCode,
+                errorMessage = if (event.type == TaskEventType.FAILED) rawErrorMessage else null,
                 trace = trace,
                 thinking = thinking,
                 sensitiveScreenDetected = detectSensitiveScreen(rawErrorMessage),
@@ -490,6 +515,9 @@ class AiMacrodroidService : Service() {
             if (event.type == TaskEventType.COMPLETED) {
                 synchronized(runtimeLock) {
                     taskRuntimeMap.remove(event.taskId)
+                    if (taskRuntimeMap.isEmpty()) {
+                        pollPausedByTask = false
+                    }
                 }
                 if (_currentRemoteTask.value == event.taskId) {
                     _currentRemoteTask.value = null
@@ -506,6 +534,9 @@ class AiMacrodroidService : Service() {
                         if (expired) {
                             synchronized(runtimeLock) {
                                 taskRuntimeMap.remove(runtime.taskId)
+                                if (taskRuntimeMap.isEmpty()) {
+                                    pollPausedByTask = false
+                                }
                             }
                             if (_currentRemoteTask.value == runtime.taskId) {
                                 _currentRemoteTask.value = null
@@ -517,6 +548,9 @@ class AiMacrodroidService : Service() {
                 } else {
                     synchronized(runtimeLock) {
                         taskRuntimeMap.remove(event.taskId)
+                        if (taskRuntimeMap.isEmpty()) {
+                            pollPausedByTask = false
+                        }
                     }
                     if (_currentRemoteTask.value == event.taskId) {
                         _currentRemoteTask.value = null
@@ -632,10 +666,12 @@ class AiMacrodroidService : Service() {
         val deviceManager = ComponentManager.getInstance(this).deviceManager
         val taskIdLong = taskId.toLongOrNull() ?: return
         val req = EventReq(
+            eventNo = generateEventNo(taskId, System.currentTimeMillis()),
             taskId = taskIdLong,
             status = "FAIL",
             timestamp = System.currentTimeMillis(),
             errorCode = errorCode,
+            errorMessage = message,
             trace = listOf(
                 buildJsonObject {
                     put("eventType", "SYNTHETIC_FAIL")
@@ -698,10 +734,10 @@ class AiMacrodroidService : Service() {
         if (key.isBlank()) {
             return req
         }
-        val stepId = req.commandId ?: ""
+        val stepId = req.stepId?.toString() ?: req.commandId.orEmpty()
         val bodyDigest = buildBodyDigest(req)
         val dataToSign = "$deviceId:${req.taskId}:$stepId:${req.timestamp}:$bodyDigest"
-        val signature = HmacUtil.generateSignature(dataToSign, key)
+        val signature = HmacUtil.generateSignature(dataToSign, key).trimEnd('=')
         return req.copy(hmac = signature)
     }
 
@@ -715,22 +751,53 @@ class AiMacrodroidService : Service() {
     }
 
     private fun buildBodyDigest(req: EventReq): String {
-        val body = listOf(
-            req.status,
-            req.durationMs?.toString().orEmpty(),
-            req.screenshotUrl.orEmpty(),
-            req.errorCode.orEmpty(),
-            req.trace?.joinToString("|") { it.toString() }.orEmpty(),
-            req.thinking.orEmpty(),
-            req.sensitiveScreenDetected.toString(),
-            req.progress?.toString().orEmpty(),
-        ).joinToString("#")
-        return sha256Hex(body)
+        val body = buildJsonObject {
+            put("eventNo", JsonPrimitive(req.eventNo))
+            put("taskId", JsonPrimitive(req.taskId))
+            put("stepId", req.stepId?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("commandId", req.commandId?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("status", JsonPrimitive(req.status))
+            put("timestamp", JsonPrimitive(req.timestamp))
+            put("durationMs", req.durationMs?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("screenshotUrl", req.screenshotUrl?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("foregroundPkg", req.foregroundPkg?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("elements", req.elements?.let { JsonArray(it) } ?: JsonNull)
+            put("errorCode", req.errorCode?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("errorMessage", req.errorMessage?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("trace", req.trace?.let { JsonArray(it) } ?: JsonNull)
+            put("thinking", req.thinking?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("sensitiveScreenDetected", JsonPrimitive(req.sensitiveScreenDetected))
+            put("progress", req.progress ?: JsonNull)
+        }
+        return sha256Hex(body.toString())
+    }
+
+    private fun generateEventNo(taskId: String, timestamp: Long): String {
+        val suffix = System.nanoTime().toString().takeLast(6)
+        return "EV-$taskId-$timestamp-$suffix"
     }
 
     private fun sha256Hex(raw: String): String {
         val bytes = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun resolveScreenshotUrlForUpload(runtime: RemoteTaskRuntime): String? {
+        val current = runtime.latestScreenshot ?: return null
+        val digest = screenshotDigest(current)
+        if (digest == null || digest == runtime.lastUploadedScreenshotDigest) {
+            return null
+        }
+        runtime.lastUploadedScreenshotDigest = digest
+        return current
+    }
+
+    private fun screenshotDigest(screenshotUrl: String): String? {
+        val payload = screenshotUrl.substringAfter(',', "").trim()
+        if (payload.isBlank()) {
+            return null
+        }
+        return sha256Hex(payload)
     }
 
     private fun readLong(obj: JsonObject?, key: String): Long? {

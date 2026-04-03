@@ -2,9 +2,6 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { createTask, getTaskDetail, getTasks } from '../mock/api'
 import { useAppStore } from './app'
-import { createPagePolling } from '../utils/polling'
-
-const POLL_INTERVAL = 3000
 
 export const useTasksStore = defineStore('tasks', () => {
   const appStore = useAppStore()
@@ -14,9 +11,6 @@ export const useTasksStore = defineStore('tasks', () => {
   const detail = ref(null)
   const detailLoading = ref(false)
   const detailDeviceFilter = ref('')
-  const detailTaskId = ref('')
-  const listPoller = createPagePolling(refreshList, POLL_INTERVAL)
-  const detailPoller = createPagePolling(() => refreshDetail(detailTaskId.value), POLL_INTERVAL)
 
   const filteredList = computed(() =>
     list.value.filter((item) => {
@@ -70,23 +64,6 @@ export const useTasksStore = defineStore('tasks', () => {
     return createTask(payload)
   }
 
-  function startListPolling() {
-    listPoller.start()
-  }
-
-  function stopListPolling() {
-    listPoller.stop()
-  }
-
-  function startDetailPolling(taskId) {
-    detailTaskId.value = taskId
-    detailPoller.start()
-  }
-
-  function stopDetailPolling() {
-    detailPoller.stop()
-  }
-
   function setDetailDeviceFilter(deviceId) {
     detailDeviceFilter.value = deviceId || ''
   }
@@ -103,10 +80,6 @@ export const useTasksStore = defineStore('tasks', () => {
     refreshList,
     refreshDetail,
     submitTask,
-    startListPolling,
-    stopListPolling,
-    startDetailPolling,
-    stopDetailPolling,
     setDetailDeviceFilter
   }
 })

@@ -4,12 +4,15 @@ import com.aimacrodroid.common.exception.BizException;
 import com.aimacrodroid.domain.dto.EventReportReqDTO;
 import com.aimacrodroid.domain.entity.Device;
 import com.aimacrodroid.domain.entity.RunEvent;
+import com.aimacrodroid.domain.entity.RunEventType;
 import com.aimacrodroid.domain.entity.Snapshot;
+import com.aimacrodroid.domain.entity.StepInstance;
 import com.aimacrodroid.domain.entity.Task;
 import com.aimacrodroid.domain.entity.TaskDeviceRun;
 import com.aimacrodroid.mapper.DeviceMapper;
 import com.aimacrodroid.mapper.RunEventMapper;
 import com.aimacrodroid.mapper.SnapshotMapper;
+import com.aimacrodroid.mapper.StepInstanceMapper;
 import com.aimacrodroid.mapper.TaskMapper;
 import com.aimacrodroid.mapper.TaskDeviceRunMapper;
 import com.aimacrodroid.security.DeviceSignatureVerifier;
@@ -43,6 +46,7 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
     private final SnapshotMapper snapshotMapper;
     private final TaskDeviceRunMapper taskDeviceRunMapper;
     private final TaskMapper taskMapper;
+    private final StepInstanceMapper stepInstanceMapper;
     private final DeviceMapper deviceMapper;
     private final AlertService alertService;
     private final AuditLogService auditLogService;
@@ -74,9 +78,16 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
         event.setEventNo(req.getEventNo());
         event.setTaskId(req.getTaskId());
         event.setRunId(run.getId());
-        event.setStepInstanceId(req.getStepId());
+        Long stepInstanceId = req.getStepId();
+        if (stepInstanceId == null && run.getCurrentStepNo() != null) {
+            stepInstanceId = resolveStepInstanceId(run.getTaskId(), run.getCurrentStepNo());
+        }
+        event.setStepInstanceId(stepInstanceId);
         event.setCommandId(req.getCommandId());
         event.setEventStatus(req.getStatus());
+        RunEventType eventType = resolveEventType(req);
+        event.setEventType(eventType.name());
+        event.setEventTypeDesc(eventType.getZhDesc());
         event.setOccurredAt(toTime(req.getTimestamp()));
         event.setDurationMs(req.getDurationMs());
         event.setErrorCode(req.getErrorCode());
@@ -102,7 +113,22 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
         }
 
         boolean needUpdate = false;
-        if (canTransit(run.getRunStatus(), req.getStatus())) {
+        Integer currentStepNo = run.getCurrentStepNo() == null || run.getCurrentStepNo() <= 0 ? 1 : run.getCurrentStepNo();
+        Integer maxStepNo = resolveMaxStepNo(run.getTaskId());
+        boolean hasNextStep = "SUCCESS".equals(req.getStatus())
+                && maxStepNo != null
+                && currentStepNo < maxStepNo;
+        if (hasNextStep) {
+            run.setCurrentStepNo(currentStepNo + 1);
+            run.setRunStatus("RUNNING");
+            run.setFinishedAt(null);
+            run.setErrorCode(null);
+            run.setErrorMessage(null);
+            if (run.getStartedAt() == null) {
+                run.setStartedAt(LocalDateTime.now());
+            }
+            needUpdate = true;
+        } else if (canTransit(run.getRunStatus(), req.getStatus())) {
             run.setRunStatus(req.getStatus());
             if ("RUNNING".equals(req.getStatus()) && run.getStartedAt() == null) {
                 run.setStartedAt(LocalDateTime.now());
@@ -182,16 +208,98 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
         List<Device> devices = deviceMapper.selectList(deviceQuery);
         Map<Long, String> deviceCodeMap = devices.stream()
                 .collect(Collectors.toMap(Device::getId, Device::getDeviceCode));
+        Map<Long, StepInstance> stepMap = buildStepMap(events);
         for (RunEvent event : events) {
             Long devicePkId = runDeviceMap.get(event.getRunId());
             if (devicePkId != null) {
                 event.setDeviceId(deviceCodeMap.getOrDefault(devicePkId, String.valueOf(devicePkId)));
             }
+            if (event.getStepInstanceId() != null) {
+                StepInstance step = stepMap.get(event.getStepInstanceId());
+                if (step != null) {
+                    event.setStepNo(step.getStepNo());
+                    event.setStepName(step.getStepName());
+                }
+            }
             if (event.getOccurredAt() != null) {
                 event.setEventTimestamp(event.getOccurredAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
             }
+            event.setResultDesc(resolveResultDesc(event.getEventStatus()));
+            event.setStageDesc(resolveStageDesc(event));
         }
         return events;
+    }
+
+    private Long resolveStepInstanceId(Long taskId, Integer stepNo) {
+        if (taskId == null || stepNo == null || stepNo <= 0) {
+            return null;
+        }
+        LambdaQueryWrapper<StepInstance> query = new LambdaQueryWrapper<>();
+        query.eq(StepInstance::getTaskId, taskId)
+                .eq(StepInstance::getStepNo, stepNo)
+                .last("LIMIT 1");
+        StepInstance step = stepInstanceMapper.selectOne(query);
+        return step == null ? null : step.getId();
+    }
+
+    private Integer resolveMaxStepNo(Long taskId) {
+        if (taskId == null) {
+            return null;
+        }
+        LambdaQueryWrapper<StepInstance> query = new LambdaQueryWrapper<>();
+        query.eq(StepInstance::getTaskId, taskId)
+                .orderByDesc(StepInstance::getStepNo)
+                .last("LIMIT 1");
+        StepInstance step = stepInstanceMapper.selectOne(query);
+        return step == null ? null : step.getStepNo();
+    }
+
+    private Map<Long, StepInstance> buildStepMap(List<RunEvent> events) {
+        Set<Long> stepIds = events.stream()
+                .map(RunEvent::getStepInstanceId)
+                .filter(id -> id != null && id > 0)
+                .collect(Collectors.toSet());
+        if (stepIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<StepInstance> steps = stepInstanceMapper.selectBatchIds(stepIds);
+        if (steps == null || steps.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return steps.stream().collect(Collectors.toMap(StepInstance::getId, s -> s, (a, b) -> a));
+    }
+
+    private String resolveResultDesc(String status) {
+        if ("SUCCESS".equals(status)) {
+            return "执行成功";
+        }
+        if ("FAIL".equals(status)) {
+            return "执行失败";
+        }
+        if ("RUNNING".equals(status)) {
+            return "执行中";
+        }
+        return "状态未知";
+    }
+
+    private String resolveStageDesc(RunEvent event) {
+        StringBuilder builder = new StringBuilder();
+        if (event.getStepNo() != null && event.getStepNo() > 0) {
+            builder.append("第").append(event.getStepNo()).append("步");
+            if (StringUtils.hasText(event.getStepName())) {
+                builder.append("（").append(event.getStepName()).append("）");
+            }
+        } else {
+            builder.append("步骤信息缺失");
+        }
+        builder.append("：").append(resolveResultDesc(event.getEventStatus()));
+        if (StringUtils.hasText(event.getErrorCode())) {
+            builder.append("，错误码：").append(event.getErrorCode());
+        }
+        if (StringUtils.hasText(event.getErrorMessage())) {
+            builder.append("，原因：").append(event.getErrorMessage());
+        }
+        return builder.toString();
     }
 
     private Device getDeviceOrThrow(String deviceId) {
@@ -293,5 +401,21 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
             return LocalDateTime.now();
         }
         return LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampMs), java.time.ZoneId.systemDefault());
+    }
+
+    private RunEventType resolveEventType(EventReportReqDTO req) {
+        if (req.getTrace() != null && !req.getTrace().isEmpty()) {
+            RunEventType fromTrace = RunEventType.fromTrace(req.getTrace().get(0));
+            if (fromTrace != RunEventType.UNKNOWN) {
+                return fromTrace;
+            }
+        }
+        if ("SUCCESS".equals(req.getStatus())) {
+            return RunEventType.COMPLETED;
+        }
+        if ("FAIL".equals(req.getStatus())) {
+            return RunEventType.FAILED;
+        }
+        return RunEventType.UNKNOWN;
     }
 }

@@ -49,10 +49,32 @@ public class RunEvent extends BaseEntity {
     private String eventStatus;
 
     /**
+     * 事件类型(参考设备端 TaskEventType)
+     */
+    private String eventType;
+
+    /**
+     * 事件类型中文解释
+     */
+    private String eventTypeDesc;
+
+    /**
      * 设备端实际上报时间戳(毫秒)
      */
     @TableField(exist = false)
     private Long eventTimestamp;
+
+    @TableField(exist = false)
+    private Integer stepNo;
+
+    @TableField(exist = false)
+    private String stepName;
+
+    @TableField(exist = false)
+    private String resultDesc;
+
+    @TableField(exist = false)
+    private String stageDesc;
 
     /**
      * 本步骤耗时(毫秒)

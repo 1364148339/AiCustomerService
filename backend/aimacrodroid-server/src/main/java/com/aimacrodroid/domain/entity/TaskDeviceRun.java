@@ -26,6 +26,9 @@ public class TaskDeviceRun extends BaseEntity {
      */
     private Long deviceId;
 
+    @TableField(exist = false)
+    private String deviceCode;
+
     /**
      * 设备任务状态(PENDING/RUNNING/SUCCESS/FAIL)
      */

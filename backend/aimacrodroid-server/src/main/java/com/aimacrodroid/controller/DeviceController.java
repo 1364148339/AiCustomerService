@@ -30,8 +30,6 @@ public class DeviceController {
     @Operation(summary = "设备注册", description = "设备首次接入或重新接入时调用，分配 Token 用于后续通信鉴权")
     @PostMapping("/register")
     public Result<DeviceRegisterVO> register(@Validated @RequestBody DeviceRegisterReqDTO req) {
-        Result<DeviceRegisterVO> success = Result.success(deviceService.register(req));
-        System.out.println(success);
         return Result.success(deviceService.register(req));
     }
 

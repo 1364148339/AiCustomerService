@@ -106,6 +106,33 @@
 
                     </LinearLayout>
 
+                    <TextView
+                        android:id="@+id/tvPendingTasksSummary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="待执行任务（0）"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <androidx.recyclerview.widget.RecyclerView
+                        android:id="@+id/rvPendingTasks"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:nestedScrollingEnabled="false"
+                        tools:itemCount="2"
+                        tools:listitem="@layout/item_pending_task" />
+
+                    <TextView
+                        android:id="@+id/tvPendingTasksEmpty"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="暂无待执行任务"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
                 </LinearLayout>
 
             </com.google.android.material.card.MaterialCardView>

@@ -134,15 +134,16 @@ function toArrayCapabilities(capabilities) {
 }
 
 function toLogLevel(event) {
-  if (event.status === 'FAIL') return 'ERROR'
+  if (event.eventType === 'FAILED') return 'ERROR'
   if (event.errorCode) return 'WARN'
   return 'INFO'
 }
 
 function toLogMessage(event) {
+  if (event.stageDesc) return event.stageDesc
   if (event.errorCode) return `错误码: ${event.errorCode}`
   if (event.thinking) return event.thinking
-  return `状态变更: ${event.status || 'UNKNOWN'}`
+  return `事件类型: ${event.eventTypeDesc || event.eventType || '未知事件'}`
 }
 
 function resolveTaskConstraints(task) {
@@ -163,20 +164,40 @@ function mapStepInstance(step) {
 }
 
 function mapEvent(item) {
+  const stepNo = Number(item.stepNo || item.currentStepNo || 0)
+  const eventType = item.eventType || ''
+  const eventTypeDesc = item.eventTypeDesc || ''
+  const status = item.status || item.eventStatus || 'RUNNING'
+  const resultDesc = item.resultDesc || (status === 'SUCCESS'
+    ? '执行成功'
+    : status === 'FAIL'
+      ? '执行失败'
+      : '执行中')
+  const stepName = item.stepName || ''
+  const stageDesc = item.stageDesc || `${stepNo > 0 ? `第${stepNo}步` : '步骤信息缺失'}${stepName ? `（${stepName}）` : ''}：${resultDesc}`
   return {
+    eventNo: item.eventNo || '',
     taskId: String(item.taskId),
     deviceId: item.deviceId || item.deviceCode || '--',
+    stepInstanceId: item.stepInstanceId || null,
     commandId: item.commandId || String(item.stepInstanceId || '--'),
-    status: item.status || item.eventStatus || 'RUNNING',
+    status,
+    eventStatus: status,
+    eventType,
+    eventTypeDesc: eventTypeDesc || (eventType ? eventType.replaceAll('_', ' ') : '未知事件'),
     timestamp: parseTimestamp(item.eventTimestamp || item.occurredAt || item.gmtCreate),
     thinking: item.thinking || item.thinkingText || '',
     thinkingText: item.thinkingText || item.thinking || '',
     screenshotUrl: item.screenshotUrl || '',
     traceJson: safeJsonStringify(item.traceJson || item.trace || ''),
     elementJson: safeJsonStringify(item.elementJson || item.elements || item.element || ''),
-    stepNo: Number(item.stepNo || item.currentStepNo || item.stepInstanceId || 0),
+    stepNo,
+    stepName,
+    resultDesc,
+    stageDesc,
     sensitiveScreenDetected: boolFlag(item.sensitiveScreenDetected ?? item.isSensitiveScreen),
     errorCode: item.errorCode || '',
+    errorMessage: item.errorMessage || '',
     progress: item.progress || item.progressJson || {},
     durationMs: item.durationMs || 0
   }
@@ -379,6 +400,7 @@ export async function getTaskDetail(taskId) {
     .map((item) => ({
       taskId: item.taskId,
       deviceId: item.deviceId,
+      stepInstanceId: item.stepInstanceId,
       stepNo: item.stepNo,
       timestamp: item.timestamp,
       screenshotUrl: item.screenshotUrl
@@ -411,7 +433,7 @@ export async function getTaskDetail(taskId) {
     safetyRails: detail.task.safetyRails || {},
     rhythm: detail.task.rhythm || {},
     devicesRuns: runs.map((run) => ({
-      deviceId: run.deviceId,
+      deviceId: run.deviceCode || String(run.deviceId || '--'),
       status: resolveRunStatus(run),
       retry: run.retryCount || 0,
       errorCode: run.errorCode || '',

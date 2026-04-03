@@ -17,6 +17,8 @@ import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -37,6 +39,7 @@ import com.kevinluo.autoglm.voice.VoiceRecognitionResult
 import com.kevinluo.autoglm.network.AiMacrodroidService
 import com.kevinluo.autoglm.network.ConnectionState
 import com.kevinluo.autoglm.network.TokenManager
+import com.kevinluo.autoglm.network.model.TaskDto
 import com.kevinluo.autoglm.voice.VoiceRecordingDialog
 import kotlinx.coroutines.launch
 
@@ -68,8 +71,18 @@ class TaskFragment : Fragment() {
     private lateinit var ivConnectionStatusIcon: android.widget.ImageView
     private lateinit var tvConnectionStatus: TextView
     private lateinit var tvCurrentTask: TextView
+    private lateinit var tvPendingTasksSummary: TextView
+    private lateinit var tvPendingTasksEmpty: TextView
+    private lateinit var rvPendingTasks: RecyclerView
     private lateinit var btnReconnect: ImageButton
     private lateinit var btnUnbind: ImageButton
+    private val pendingTaskAdapter = PendingTaskAdapter { task ->
+        Toast.makeText(
+            requireContext(),
+            "任务ID: ${task.id}\n类型: ${task.track.uppercase()}\n优先级: ${task.priority}",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
 
     // Permission request launcher
     private val audioPermissionLauncher =
@@ -105,6 +118,7 @@ class TaskFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        rvPendingTasks.adapter = null
         voiceInputManager?.release()
         voiceInputManager = null
     }
@@ -118,8 +132,13 @@ class TaskFragment : Fragment() {
         ivConnectionStatusIcon = view.findViewById(R.id.ivConnectionStatusIcon)
         tvConnectionStatus = view.findViewById(R.id.tvConnectionStatus)
         tvCurrentTask = view.findViewById(R.id.tvCurrentTask)
+        tvPendingTasksSummary = view.findViewById(R.id.tvPendingTasksSummary)
+        tvPendingTasksEmpty = view.findViewById(R.id.tvPendingTasksEmpty)
+        rvPendingTasks = view.findViewById(R.id.rvPendingTasks)
         btnReconnect = view.findViewById(R.id.btnReconnect)
         btnUnbind = view.findViewById(R.id.btnUnbind)
+        rvPendingTasks.layoutManager = LinearLayoutManager(requireContext())
+        rvPendingTasks.adapter = pendingTaskAdapter
 
         // Task Input Views
         taskInput = view.findViewById(R.id.taskInput)
@@ -207,6 +226,12 @@ class TaskFragment : Fragment() {
                         updateCurrentRemoteTaskUi(taskId)
                     }
                 }
+
+                launch {
+                    AiMacrodroidService.pendingRemoteTasks.collect { tasks ->
+                        updatePendingTaskListUi(tasks)
+                    }
+                }
             }
         }
     }
@@ -233,6 +258,20 @@ class TaskFragment : Fragment() {
             tvCurrentTask.text = "无执行中任务"
             tvCurrentTask.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary))
         }
+    }
+
+    private fun updatePendingTaskListUi(tasks: List<TaskDto>) {
+        pendingTaskAdapter.submitItems(tasks)
+        tvPendingTasksSummary.text = "待执行任务（${tasks.size}）"
+        if (tasks.isEmpty()) {
+            tvPendingTasksSummary.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary))
+            tvPendingTasksEmpty.visibility = View.VISIBLE
+            rvPendingTasks.visibility = View.GONE
+            return
+        }
+        tvPendingTasksSummary.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary))
+        tvPendingTasksEmpty.visibility = View.GONE
+        rvPendingTasks.visibility = View.VISIBLE
     }
 
     private fun reconnectAiMacrodroid() {
@@ -464,5 +503,39 @@ class TaskFragment : Fragment() {
 
     companion object {
         private const val TAG = "TaskFragment"
+    }
+}
+
+private class PendingTaskAdapter(
+    private val onItemClick: (TaskDto) -> Unit
+) : RecyclerView.Adapter<PendingTaskAdapter.PendingTaskViewHolder>() {
+    private val items = mutableListOf<TaskDto>()
+
+    fun submitItems(newItems: List<TaskDto>) {
+        items.clear()
+        items.addAll(newItems)
+        notifyDataSetChanged()
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PendingTaskViewHolder {
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_pending_task, parent, false)
+        return PendingTaskViewHolder(view)
+    }
+
+    override fun onBindViewHolder(holder: PendingTaskViewHolder, position: Int) {
+        holder.bind(items[position], onItemClick)
+    }
+
+    override fun getItemCount(): Int = items.size
+
+    class PendingTaskViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        private val tvPendingTaskId: TextView = itemView.findViewById(R.id.tvPendingTaskId)
+        private val tvPendingTaskMeta: TextView = itemView.findViewById(R.id.tvPendingTaskMeta)
+
+        fun bind(task: TaskDto, onItemClick: (TaskDto) -> Unit) {
+            tvPendingTaskId.text = task.id
+            tvPendingTaskMeta.text = "${task.track.uppercase()} · P${task.priority}"
+            itemView.setOnClickListener { onItemClick(task) }
+        }
     }
 }

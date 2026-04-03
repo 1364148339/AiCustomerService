@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useDevicesStore } from '../stores/devices'
@@ -131,7 +131,6 @@ function syncCreateByQuery() {
 
 onMounted(async () => {
   await Promise.all([tasksStore.refreshList(), devicesStore.refresh(), scenariosStore.refreshScenarios()])
-  tasksStore.startListPolling()
   syncCreateByQuery()
 })
 
@@ -139,10 +138,6 @@ watch(
   () => `${route.query.create || ''}|${route.query.scenarioKey || ''}`,
   () => syncCreateByQuery()
 )
-
-onBeforeUnmount(() => {
-  tasksStore.stopListPolling()
-})
 </script>
 
 <template>

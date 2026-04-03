@@ -1,6 +1,7 @@
 package com.aimacrodroid.worker;
 
 import com.aimacrodroid.domain.entity.RunEvent;
+import com.aimacrodroid.domain.entity.RunEventType;
 import com.aimacrodroid.domain.entity.StepInstance;
 import com.aimacrodroid.domain.entity.Task;
 import com.aimacrodroid.domain.entity.TaskDeviceRun;
@@ -75,55 +76,14 @@ public class TaskWorker {
                 .eq(TaskDeviceRun::getRunStatus, "PENDING")
                 .orderByAsc(TaskDeviceRun::getGmtCreate);
         List<TaskDeviceRun> pendingRuns = taskDeviceRunMapper.selectList(runQuery);
-        int dispatched = 0;
-        for (TaskDeviceRun run : pendingRuns) {
-            if (!canDispatch(run.getDeviceId())) {
-                continue;
-            }
-            run.setRunStatus("RUNNING");
-            if (run.getStartedAt() == null) {
-                run.setStartedAt(LocalDateTime.now());
-            }
-            if (run.getCurrentStepNo() == null) {
-                run.setCurrentStepNo(1);
-            }
-            taskDeviceRunMapper.updateById(run);
-            insertRunningEvent(task.getId(), run);
-            auditLogService.record("worker", "RUN_DISPATCH", "TASK_DEVICE_RUN", String.valueOf(run.getId()), "SUCCESS", new HashMap<>());
-            dispatched++;
-        }
-        if (dispatched > 0) {
-            if (task.getStartedAt() == null) {
-                task.setStartedAt(LocalDateTime.now());
-            }
-            task.setStatus("RUNNING");
-            taskMapper.updateById(task);
-            return;
-        }
-        if ("QUEUED".equals(task.getStatus()) && !pendingRuns.isEmpty()) {
+        if (!pendingRuns.isEmpty() && "QUEUED".equals(task.getStatus())) {
             task.setStatus("DISPATCHING");
             taskMapper.updateById(task);
+            HashMap<String, Object> detail = new HashMap<>();
+            detail.put("taskId", task.getId());
+            detail.put("pendingCount", pendingRuns.size());
+            auditLogService.record("worker", "TASK_DISPATCH_READY", "TASK", String.valueOf(task.getId()), "SUCCESS", detail);
         }
-    }
-
-    private boolean canDispatch(Long deviceId) {
-        LambdaQueryWrapper<TaskDeviceRun> query = new LambdaQueryWrapper<>();
-        query.eq(TaskDeviceRun::getDeviceId, deviceId)
-                .eq(TaskDeviceRun::getRunStatus, "RUNNING");
-        Long runningCount = taskDeviceRunMapper.selectCount(query);
-        return runningCount == null || runningCount < dispatchProperties.getDeviceConcurrency();
-    }
-
-    private void insertRunningEvent(Long taskId, TaskDeviceRun run) {
-        RunEvent event = new RunEvent();
-        event.setEventNo(workerEventNo("DISPATCH"));
-        event.setTaskId(taskId);
-        event.setRunId(run.getId());
-        event.setStepInstanceId(resolveCurrentStepId(taskId, run.getCurrentStepNo()));
-        event.setEventStatus("RUNNING");
-        event.setOccurredAt(LocalDateTime.now());
-        event.setIsSensitiveScreen(0);
-        runEventMapper.insert(event);
     }
 
     private boolean isTimedOut(TaskDeviceRun run) {
@@ -168,6 +128,8 @@ public class TaskWorker {
             retryEvent.setRunId(run.getId());
             retryEvent.setStepInstanceId(resolveCurrentStepId(run.getTaskId(), run.getCurrentStepNo()));
             retryEvent.setEventStatus("RUNNING");
+            retryEvent.setEventType(RunEventType.UNKNOWN.name());
+            retryEvent.setEventTypeDesc(RunEventType.UNKNOWN.getZhDesc());
             retryEvent.setOccurredAt(LocalDateTime.now());
             retryEvent.setErrorCode("STEP_RETRYING");
             retryEvent.setErrorMessage("步骤超时重试");
@@ -202,6 +164,8 @@ public class TaskWorker {
         event.setRunId(run.getId());
         event.setStepInstanceId(resolveCurrentStepId(run.getTaskId(), run.getCurrentStepNo()));
         event.setEventStatus("FAIL");
+        event.setEventType(RunEventType.FAILED.name());
+        event.setEventTypeDesc(RunEventType.FAILED.getZhDesc());
         event.setOccurredAt(LocalDateTime.now());
         event.setErrorCode("STEP_EXEC_TIMEOUT");
         event.setErrorMessage("执行超时");
