@@ -21,18 +21,14 @@ const deviceFilter = computed({
 const flowOverview = computed(() => {
   const data = detail.value
   if (!data) return null
-  const runs = data.devicesRuns || []
+  const runs = data.deviceRuns || []
   const events = data.events || []
-  const published = !!data.taskId && !!data.createdAt
-  const allDeviceIds = runs.map((item) => item.deviceId).filter(Boolean)
-  const distributedDeviceIds = runs.filter((item) => item.status !== 'PENDING').map((item) => item.deviceId)
-  const pendingDeviceIds = runs.filter((item) => item.status === 'PENDING').map((item) => item.deviceId)
-  const ackDeviceIds = Array.from(
-    new Set(events
-      .filter((item) => item.errorCode === 'DEVICE_TASK_ACKED' || item.progress?.source === 'DEVICE_TASK_ACKED')
-      .map((item) => item.deviceId)
-      .filter(Boolean))
-  )
+  const published = Boolean(data.taskNo || data.taskId)
+  const distributedDeviceIds = [...new Set(runs.filter((item) => item.status !== 'PENDING').map((item) => item.deviceId).filter(Boolean))]
+  const ackDeviceIds = [...new Set(events
+    .filter((item) => item.errorCode === 'DEVICE_TASK_ACKED' || item.progress?.source === 'DEVICE_TASK_ACKED')
+    .map((item) => item.deviceId)
+    .filter(Boolean))]
   const distributedCount = distributedDeviceIds.length
   const ackCount = ackDeviceIds.length
   const receiveStatus = ackCount === 0 ? false : ackCount === runs.length ? true : 'running'
@@ -57,111 +53,137 @@ const flowOverview = computed(() => {
       text: receiveText,
       detail: `已分发 ${distributedCount}/${runs.length} 台（ACK ${ackCount} 台）`
     },
-    receiveDetail: {
-      total: allDeviceIds,
-      distributed: distributedDeviceIds,
-      pending: pendingDeviceIds,
-      acked: ackDeviceIds
-    },
     process: {
-      status: processStatus,
-      text: processStatus === 'risk' ? '执行异常' : processStatus === 'running' ? '执行中' : processStatus === 'ok' ? '执行有进展' : '暂无过程数据',
-      detail: latestEvent
-        ? `${latestEvent.eventTypeDesc || latestEvent.eventType || '未知事件'} · ${latestEvent.stageDesc || '无阶段描述'}`
-        : '还未产生事件记录'
+      ok: processStatus,
+      text: failedEvents.length > 0 ? '处理中存在风险' : executing ? '处理中' : events.length > 0 ? '处理轨迹已生成' : '尚无处理轨迹',
+      detail: latestEvent ? `最近事件：${latestEvent.stageDesc || latestEvent.eventTypeDesc || latestEvent.eventType || '未知事件'}` : '设备尚未上报执行事件'
     },
     result: {
-      status: resultStatus,
-      text: data.status === 'SUCCESS' ? '执行成功' : data.status === 'FAIL' ? '执行失败' : data.status === 'CANCELED' ? '已取消' : '未完成',
-      detail: data.status === 'SUCCESS' ? '全部设备执行完成' : data.status === 'FAIL' ? '存在失败设备或步骤' : '等待最终结果'
+      ok: resultStatus,
+      text: statusText(data.status),
+      detail: finalDone ? `成功 ${data.metrics?.alertCount ? '伴随告警' : '无额外告警'}` : '任务仍在执行流程中'
     }
   }
 })
 
-function statusTagType(status) {
-  if (status === 'SUCCESS') return 'success'
-  if (status === 'FAIL') return 'danger'
-  if (status === 'RUNNING') return 'warning'
-  return 'info'
+const currentTaskId = computed(() => String(route.params.id || ''))
+
+function loadDetail(taskId) {
+  if (!taskId) return
+  tasksStore.fetchDetail(taskId)
 }
 
-function eventTypeTagType(eventType) {
-  if (eventType === 'FAILED') return 'danger'
-  if (eventType === 'COMPLETED') return 'success'
-  if (eventType === 'STARTED' || eventType === 'STEP_STARTED') return 'warning'
+function refreshCurrentDetail() {
+  loadDetail(currentTaskId.value)
+}
+
+function statusTagType(status) {
+  if (status === 'SUCCESS') return 'success'
+  if (status === 'FAIL' || status === 'CANCELED') return 'danger'
+  if (status === 'RUNNING' || status === 'DISPATCHING') return 'warning'
   return 'info'
 }
 
 function statusText(status) {
-  if (status === 'SUCCESS') return '成功'
-  if (status === 'FAIL') return '失败'
-  if (status === 'RUNNING') return '执行中'
-  if (status === 'PENDING') return '待执行'
-  if (status === 'DISPATCHING') return '分发中'
-  if (status === 'QUEUED') return '排队中'
-  return status || '未知'
+  switch (status) {
+    case 'QUEUED':
+      return '排队中'
+    case 'DISPATCHING':
+      return '派发中'
+    case 'RUNNING':
+      return '执行中'
+    case 'SUCCESS':
+      return '执行成功'
+    case 'FAIL':
+      return '执行失败'
+    case 'CANCELED':
+      return '已取消'
+    default:
+      return status || '未知状态'
+  }
 }
 
-function formatDuration(ms) {
-  const sec = Math.floor(ms / 1000)
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const s = sec % 60
-  return `${h}h ${m}m ${s}s`
-}
-function overviewType(status) {
-  if (status === true || status === 'ok') return 'success'
-  if (status === false || status === 'fail' || status === 'risk') return 'danger'
-  if (status === 'running') return 'warning'
+function eventTypeTagType(type) {
+  if (type === 'FAILED') return 'danger'
+  if (type === 'COMPLETED') return 'success'
+  if (type === 'STEP_STARTED' || type === 'ACTION_EXECUTED') return 'warning'
   return 'info'
 }
 
-onMounted(async () => {
-  await tasksStore.refreshDetail(route.params.id)
-  const queryDeviceId = String(route.query.deviceId || '')
-  tasksStore.setDetailDeviceFilter(queryDeviceId)
-})
-
-watch(
-  () => route.params.id,
-  async (value) => {
-    if (!value) return
-    await tasksStore.refreshDetail(value)
-  }
-)
-
-watch(
-  () => route.query.deviceId,
-  (value) => {
-    tasksStore.setDetailDeviceFilter(String(value || ''))
-  }
-)
-
-function jumpToAlerts() {
-  router.push(`/alerts?taskId=${route.params.id}`)
+function flowTagType(ok) {
+  if (ok === true || ok === 'ok') return 'success'
+  if (ok === 'running') return 'warning'
+  if (ok === 'risk' || ok === false || ok === 'fail') return 'danger'
+  return 'info'
 }
 
-function refreshCurrentDetail() {
-  tasksStore.refreshDetail(route.params.id)
+function runStatusType(status) {
+  if (status === 'SUCCESS') return 'success'
+  if (status === 'FAIL' || status === 'CANCELED') return 'danger'
+  if (status === 'RUNNING') return 'warning'
+  return 'info'
 }
 
 function eventEvidenceList(ev) {
-  const stepInstanceId = ev.stepInstanceId ?? null
-  const stepNo = ev.stepNo ?? null
-  return evidences.value
-    .filter((item) =>
-      item.deviceId === ev.deviceId &&
-      (stepInstanceId !== null
-        ? item.stepInstanceId === stepInstanceId
-        : stepNo === null || item.stepNo === stepNo)
-    )
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+  return evidences.value.filter((item) => item.deviceId === ev.deviceId && item.stepNo === ev.stepNo)
+}
+
+function formatBooleanText(value, trueText, falseText, emptyText = '--') {
+  if (value === true) return trueText
+  if (value === false) return falseText
+  return emptyText
+}
+
+function isFailureEvent(ev) {
+  return ev.eventType === 'FAILED' || Boolean(ev.errorCode)
+}
+
+function showDecisionSummary(ev) {
+  if (!isFailureEvent(ev)) return false
+  return Boolean(
+    ev.failureCategory ||
+    ev.actionResult ||
+    ev.pageType ||
+    ev.pageSignature ||
+    ev.recoverable !== null ||
+    ev.targetResolved !== null
+  )
 }
 
 function locateEventAlert(ev) {
-  router.push(`/alerts?taskId=${route.params.id}&alertType=TASK_FAILURE`)
-  tasksStore.setDetailDeviceFilter(ev.deviceId || '')
+  const taskId = detail.value?.taskId || currentTaskId.value
+  router.push({
+    path: '/alerts',
+    query: {
+      taskId,
+      deviceId: ev.deviceId || '',
+      code: ev.errorCode || ev.eventType || ''
+    }
+  })
 }
+
+function jumpToAlerts() {
+  const taskId = detail.value?.taskId || currentTaskId.value
+  router.push({ path: '/alerts', query: { taskId } })
+}
+
+function pickDevice(deviceId) {
+  tasksStore.setDetailDeviceFilter(deviceId)
+}
+
+function clearDeviceFilter() {
+  tasksStore.setDetailDeviceFilter('')
+}
+
+watch(currentTaskId, (value) => {
+  loadDetail(value)
+}, { immediate: true })
+
+onMounted(() => {
+  if (currentTaskId.value) {
+    loadDetail(currentTaskId.value)
+  }
+})
 
 onBeforeUnmount(() => {
   tasksStore.setDetailDeviceFilter('')
@@ -189,69 +211,74 @@ onBeforeUnmount(() => {
           <el-descriptions-item label="优先级">{{ detail.priority }}</el-descriptions-item>
           <el-descriptions-item label="意图">{{ detail.intent || '--' }}</el-descriptions-item>
           <el-descriptions-item label="场景标识">{{ detail.scenarioKey || '--' }}</el-descriptions-item>
+          <el-descriptions-item label="场景名称">{{ detail.scenarioName || '--' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ new Date(detail.createdAt).toLocaleString() }}</el-descriptions-item>
-          <el-descriptions-item label="告警计数">{{ detail.metrics.alertCount }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ detail.statusText || statusText(detail.status) }}</el-descriptions-item>
         </el-descriptions>
       </el-card>
 
-      <el-card shadow="never" class="mb-4" v-if="flowOverview">
-        <template #header>
-          <div class="card-header">流程总览</div>
-        </template>
-        <el-timeline class="overview-flow">
-          <el-timeline-item>
-            <div class="overview-item">
-              <div class="overview-title">
-                <span>1. 任务发布</span>
-                <el-tag size="small" :type="overviewType(flowOverview.publish.ok)">{{ flowOverview.publish.text }}</el-tag>
-              </div>
-              <div class="overview-detail">{{ flowOverview.publish.detail }}</div>
+      <el-row :gutter="16" class="mb-4" v-if="flowOverview">
+        <el-col :span="6" v-for="(item, key) in flowOverview" :key="key">
+          <el-card shadow="never" class="flow-card">
+            <div class="flow-card__title">
+              <span>{{ key === 'publish' ? '发布' : key === 'receive' ? '接收' : key === 'process' ? '处理' : '结果' }}</span>
+              <el-tag size="small" :type="flowTagType(item.ok)">{{ item.text }}</el-tag>
             </div>
-          </el-timeline-item>
-          <el-timeline-item>
-            <div class="overview-item">
-              <div class="overview-title">
-                <span>2. 设备接收</span>
-                <el-tag size="small" :type="overviewType(flowOverview.receive.ok)">{{ flowOverview.receive.text }}</el-tag>
+            <div class="flow-card__detail">{{ item.detail }}</div>
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <el-row :gutter="16">
+        <el-col :span="8">
+          <el-card shadow="never" class="mb-4">
+            <template #header>
+              <div class="card-header">
+                <span>设备执行情况</span>
+                <el-button link @click="clearDeviceFilter" v-if="deviceFilter">清空筛选</el-button>
               </div>
-              <div class="overview-detail">{{ flowOverview.receive.detail }}</div>
-              <div class="overview-detail">已分发设备：{{ flowOverview.receiveDetail.distributed.join('、') || '--' }}</div>
-              <div class="overview-detail">未分发设备：{{ flowOverview.receiveDetail.pending.join('、') || '--' }}</div>
-              <div class="overview-detail">ACK设备：{{ flowOverview.receiveDetail.acked.join('、') || '--' }}</div>
+            </template>
+            <div class="device-run-list">
+              <el-card
+                v-for="run in detail.deviceRuns"
+                :key="run.deviceId"
+                shadow="hover"
+                class="device-run-card"
+                :class="{ active: deviceFilter === run.deviceId }"
+                @click="pickDevice(run.deviceId)"
+              >
+                <div class="device-run-card__header">
+                  <span>{{ run.deviceId }}</span>
+                  <el-tag size="small" :type="runStatusType(run.runStatus || run.status)">{{ run.statusText || statusText(run.runStatus || run.status) }}</el-tag>
+                </div>
+                <div class="device-run-card__meta">当前步骤：{{ run.currentStepNo || '--' }}</div>
+                <div class="device-run-card__meta">重试次数：{{ run.retryCount || 0 }}</div>
+                <div class="device-run-card__meta" v-if="run.errorCode">错误码：{{ run.errorCode }}</div>
+                <div class="device-run-card__meta" v-if="run.errorMessage">错误信息：{{ run.errorMessage }}</div>
+              </el-card>
+              <el-empty v-if="!detail.deviceRuns?.length" description="暂无设备执行记录" />
             </div>
-          </el-timeline-item>
-          <el-timeline-item>
-            <div class="overview-item">
-              <div class="overview-title">
-                <span>3. 执行过程</span>
-                <el-tag size="small" :type="overviewType(flowOverview.process.status)">{{ flowOverview.process.text }}</el-tag>
+          </el-card>
+        </el-col>
+
+        <el-col :span="16">
+          <el-card shadow="never">
+            <template #header>
+              <div class="card-header">
+                <span>执行时间线</span>
+                <el-tag type="info">{{ orderedEventLines.length }} 条事件</el-tag>
               </div>
-              <div class="overview-detail">{{ flowOverview.process.detail }}</div>
-              <div class="card-header process-filter">
-                <span>按设备查看</span>
-                <el-select
-                  v-model="deviceFilter"
-                  clearable
-                  placeholder="按设备筛选"
-                  style="width: 220px"
-                >
-                  <el-option
-                    v-for="run in detail.devicesRuns"
-                    :key="run.deviceId"
-                    :label="run.deviceId"
-                    :value="run.deviceId"
-                  />
-                </el-select>
-              </div>
-              <el-timeline v-if="orderedEventLines.length > 0" class="process-timeline">
+            </template>
+            <div class="timeline-wrapper">
+              <el-timeline v-if="orderedEventLines.length">
                 <el-timeline-item
                   v-for="ev in orderedEventLines"
-                  :key="`${ev.timestamp}-${ev.deviceId}-${ev.commandId}`"
+                  :key="`${ev.eventNo}-${ev.deviceId}-${ev.timestamp}`"
                   :timestamp="new Date(ev.timestamp).toLocaleString()"
-                  :type="eventTypeTagType(ev.eventType)"
+                  :type="ev.eventType === 'FAILED' || ev.errorCode ? 'danger' : ev.eventType === 'COMPLETED' ? 'success' : 'primary'"
                 >
-                  <el-card shadow="hover" class="timeline-card">
-                    <div class="event-title">
+                  <el-card shadow="hover" class="event-card">
+                    <div class="event-card__header">
                       <span>{{ ev.deviceId }}</span>
                       <el-tag size="small">步骤{{ ev.stepNo || '--' }}</el-tag>
                       <el-tag size="small" :type="eventTypeTagType(ev.eventType)">{{ ev.eventTypeDesc || ev.eventType || '未知事件' }}</el-tag>
@@ -264,6 +291,15 @@ onBeforeUnmount(() => {
                     <div class="event-text">错误信息：{{ ev.errorMessage || '--' }}</div>
                     <div class="event-text">持续时长：{{ ev.durationMs }}ms</div>
                     <div class="event-text" v-if="ev.sensitiveScreenDetected">敏感页面：已检测</div>
+                    <div class="decision-summary" v-if="showDecisionSummary(ev)">
+                      <div class="decision-summary__title">失败决策摘要</div>
+                      <div class="event-text">失败类别：{{ ev.failureCategoryText || '未知' }}</div>
+                      <div class="event-text">动作结果：{{ ev.actionResultText || '未知' }}</div>
+                      <div class="event-text">页面类型：{{ ev.pageTypeText || '未知页面' }}</div>
+                      <div class="event-text">可恢复：{{ formatBooleanText(ev.recoverable, '可恢复', '不可恢复', '--') }}</div>
+                      <div class="event-text">目标识别：{{ formatBooleanText(ev.targetResolved, '已识别', '未识别', '--') }}</div>
+                      <div class="event-text">页面签名：{{ ev.pageSignature || '--' }}</div>
+                    </div>
                     <div class="evidence-links" v-if="eventEvidenceList(ev).length > 0">
                       <el-link
                         v-for="(item, idx) in eventEvidenceList(ev)"
@@ -283,164 +319,122 @@ onBeforeUnmount(() => {
               </el-timeline>
               <el-empty v-else description="暂无事件记录" />
             </div>
-          </el-timeline-item>
-          <el-timeline-item>
-            <div class="overview-item">
-              <div class="overview-title">
-                <span>4. 执行结果</span>
-                <el-tag size="small" :type="overviewType(flowOverview.result.status)">{{ flowOverview.result.text }}</el-tag>
-              </div>
-              <div class="overview-detail">{{ flowOverview.result.detail }}</div>
-            </div>
-          </el-timeline-item>
-        </el-timeline>
-      </el-card>
-
-      <el-row :gutter="16" class="mb-4">
-        <el-col :span="6">
-          <el-card shadow="never" class="metric-card">
-            <div class="metric-title">累计观看时长</div>
-            <div class="metric-value">{{ formatDuration(detail.metrics.watchedDurationMs) }}</div>
-          </el-card>
-        </el-col>
-        <el-col :span="6">
-          <el-card shadow="never" class="metric-card">
-            <div class="metric-title">已切换条数</div>
-            <div class="metric-value">{{ detail.metrics.itemsCompleted }}</div>
-          </el-card>
-        </el-col>
-        <el-col :span="6">
-          <el-card shadow="never" class="metric-card">
-            <div class="metric-title">总重试次数</div>
-            <div class="metric-value">{{ detail.metrics.retryCount }}</div>
-          </el-card>
-        </el-col>
-        <el-col :span="6">
-          <el-card shadow="never" class="metric-card">
-            <div class="metric-title">事件数量</div>
-            <div class="metric-value">{{ detail.events.length }}</div>
           </el-card>
         </el-col>
       </el-row>
-
-      <el-card shadow="never" class="mb-4">
-        <template #header>
-          <div class="card-header">设备子任务进度</div>
-        </template>
-        <el-table :data="detail.devicesRuns" border>
-          <el-table-column prop="deviceId" label="设备" min-width="140" />
-          <el-table-column label="状态" width="120" align="center">
-            <template #default="{ row }">
-              <el-tag :type="statusTagType(row.status)">{{ statusText(row.status) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="retry" label="重试次数" width="100" align="center" />
-          <el-table-column label="错误码" min-width="160">
-            <template #default="{ row }">{{ row.errorCode || '--' }}</template>
-          </el-table-column>
-          <el-table-column label="进度快照" min-width="220">
-            <template #default="{ row }">
-              <span>观看 {{ row.progress?.watchedDurationMs || 0 }}ms</span>
-              <span class="progress-gap">|</span>
-              <span>条数 {{ row.progress?.itemsCompleted || 0 }}</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
-
-      <el-card shadow="never" class="mb-4" v-if="detail.commands?.length">
-        <template #header>
-          <div class="card-header">原子命令序列</div>
-        </template>
-        <el-table :data="detail.commands" border>
-          <el-table-column prop="orderNum" label="序号" width="80" align="center" />
-          <el-table-column prop="commandId" label="commandId" width="180" />
-          <el-table-column prop="action" label="action" width="180" />
-          <el-table-column label="params" min-width="220">
-            <template #default="{ row }">{{ JSON.stringify(row.params || {}) }}</template>
-          </el-table-column>
-        </el-table>
-      </el-card>
-
     </template>
-    <el-empty v-else description="任务不存在或尚未初始化" />
   </div>
 </template>
 
 <style scoped>
+.task-detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .mb-4 {
   margin-bottom: 16px;
 }
+
 .card-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
+
 .header-tags {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
-.metric-card {
-  text-align: center;
+
+.flow-card {
+  min-height: 110px;
 }
-.metric-title {
+
+.flow-card__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.flow-card__detail {
   color: var(--el-text-color-secondary);
-  font-size: 13px;
+  line-height: 1.6;
 }
-.metric-value {
-  margin-top: 8px;
-  font-size: 20px;
-  font-weight: 600;
+
+.device-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
-.progress-gap {
-  margin: 0 8px;
+
+.device-run-card {
+  cursor: pointer;
+}
+
+.device-run-card.active {
+  border-color: var(--el-color-primary);
+}
+
+.device-run-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.device-run-card__meta {
   color: var(--el-text-color-secondary);
+  line-height: 1.8;
 }
-.event-title {
+
+.timeline-wrapper {
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.event-card {
+  width: 100%;
+}
+
+.event-card__header {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 600;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
 }
+
 .event-text {
-  margin-top: 6px;
-  font-size: 13px;
+  line-height: 1.8;
   color: var(--el-text-color-regular);
 }
-.evidence-links {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.evidence-link {
-  font-size: 12px;
-}
-.overview-flow {
-  padding-right: 8px;
-}
-.overview-item {
-  margin-bottom: 12px;
+
+.decision-summary {
+  margin-top: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-light);
   border-radius: 8px;
 }
-.process-filter {
-  margin-top: 10px;
-}
-.process-timeline {
-  margin-top: 10px;
-}
-.overview-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+
+.decision-summary__title {
   font-weight: 600;
+  margin-bottom: 6px;
 }
-.overview-detail {
-  margin-top: 6px;
-  color: var(--el-text-color-regular);
-  font-size: 13px;
+
+.evidence-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.evidence-link {
+  width: fit-content;
 }
 </style>

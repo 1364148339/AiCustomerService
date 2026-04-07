@@ -1,0 +1,21 @@
+- [x] 设备端在失败事件上报时，`progress` 已包含 `pageType`、`pageSignature`、`targetResolved`、`actionResult`、`recoverable`、`failureCategory`
+- [x] 设备端新增决策字段后，原有 `errorCode`、`errorMessage`、`screenshotUrl`、`elements`、`trace`、`thinking`、`progress` 其他字段仍正常上报
+- [x] 设备端已按一期最小枚举集合生成 `failureCategory`、`actionResult`、`pageType`，未出现自由字符串扩散
+- [x] 服务端能够兼容旧版本设备端缺少新增字段的事件，不出现入库失败或查询异常
+- [x] 服务端成功从 `progress` 提取 `failureCategory`、`recoverable`、`actionResult`、`pageType`、`pageSignature` 并保存到 `RunEvent`
+- [x] 服务端已补齐 `t_run_event` 决策上下文字段列与实体映射，新增字段可真实持久化
+- [x] 事件查询接口直接返回新增决策字段，前端无需自行解析原始 `progressJson`
+- [x] 服务端对未知枚举值和缺失字段具备兼容处理，不因异常值导致接口失败
+- [x] 前端任务详情页可展示失败类别、可恢复性、动作结果、页面类型四项决策摘要
+- [x] 前端失败决策摘要已收紧为仅在失败事件展示，避免非失败事件语义偏差
+- [x] 前端已对 `failureCategory`、`actionResult`、`pageType` 提供中文文案映射
+- [x] 前端在新增字段缺失时使用兼容占位，详情页不报错、不白屏、不隐藏失败事件
+- [x] 前端对未知枚举值统一降级为“未知”或等效占位，展示行为稳定
+- [ ] 元素未找到场景联调通过，`failureCategory=ELEMENT`、`recoverable=true`、`actionResult=TARGET_NOT_FOUND` 与预期一致
+- [ ] 权限缺失场景联调通过，`failureCategory=PERMISSION`、`recoverable=false`、`pageType=PERMISSION_PAGE` 与预期一致
+- [ ] 执行超时场景联调通过，`failureCategory=TIMEOUT` 与 `actionResult` 语义一致
+- [ ] 敏感页命中场景联调通过，`failureCategory=SENSITIVE_SCREEN`、`recoverable=false`、`pageType=SENSITIVE_PAGE` 与预期一致
+- [x] 新增字段已能作为后续 Agent 失败步骤分析与指导的直接输入
+- [x] 一期能力边界已确认：当前不包含自动补救执行，仅提供结构化决策上下文
+- [ ] 一期交付物已完整具备：字段协议、最小枚举标准、后端查询能力、前端展示入口、典型场景联调结论
+- [x] 规格中已提供四类失败场景的联调操作清单与样例事件模板，可直接作为联调输入基准

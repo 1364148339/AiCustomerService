@@ -110,6 +110,18 @@ public class RunEvent extends BaseEntity {
     @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.OTHER)
     private Map<String, Object> progressJson;
 
+    private String failureCategory;
+
+    private Boolean recoverable;
+
+    private String actionResult;
+
+    private String pageType;
+
+    private String pageSignature;
+
+    private Boolean targetResolved;
+
     private String screenshotUrl;
 
     private java.time.LocalDateTime occurredAt;

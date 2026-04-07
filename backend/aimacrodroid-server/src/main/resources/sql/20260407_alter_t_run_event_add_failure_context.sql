@@ -1,0 +1,17 @@
+ALTER TABLE t_run_event
+ADD COLUMN IF NOT EXISTS failure_category VARCHAR(64);
+
+ALTER TABLE t_run_event
+ADD COLUMN IF NOT EXISTS recoverable BOOLEAN;
+
+ALTER TABLE t_run_event
+ADD COLUMN IF NOT EXISTS action_result VARCHAR(64);
+
+ALTER TABLE t_run_event
+ADD COLUMN IF NOT EXISTS page_type VARCHAR(64);
+
+ALTER TABLE t_run_event
+ADD COLUMN IF NOT EXISTS page_signature VARCHAR(255);
+
+ALTER TABLE t_run_event
+ADD COLUMN IF NOT EXISTS target_resolved BOOLEAN;

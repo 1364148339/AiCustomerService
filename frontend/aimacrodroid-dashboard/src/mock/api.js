@@ -1,153 +1,82 @@
 import axios from 'axios'
+import { randomUUID } from './utils'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '',
-  timeout: 10000
+  baseURL: '/'
 })
 
-const operatorId = import.meta.env.VITE_OPERATOR_ID || 'frontend-admin'
-const operatorRole = String(import.meta.env.VITE_OPERATOR_ROLE || 'ADMIN').toUpperCase()
-
-api.interceptors.request.use((config) => {
-  config.headers = config.headers || {}
-  if (!config.headers['X-Operator-Id']) {
-    config.headers['X-Operator-Id'] = operatorId
-  }
-  if (!config.headers['X-Operator-Role']) {
-    config.headers['X-Operator-Role'] = operatorRole
-  }
-  return config
-})
-
-const allowMockFallback = boolFlag(import.meta.env.VITE_ENABLE_API_FALLBACK)
-
-const localScenarioList = [
-  {
-    scenarioId: 'sc-001',
-    scenarioKey: 'daily_checkin',
-    scenarioName: '通用签到',
-    description: '打开应用并完成签到',
-    status: 'ACTIVE',
-    versionNo: 3,
-    updatedAt: new Date(Date.now() - 3600_000).toISOString(),
-    taskType: 'CHECKIN'
-  },
-  {
-    scenarioId: 'sc-002',
-    scenarioKey: 'video_reward',
-    scenarioName: '视频领奖',
-    description: '浏览视频并触发领奖',
-    status: 'ACTIVE',
-    versionNo: 2,
-    updatedAt: new Date(Date.now() - 7200_000).toISOString(),
-    taskType: 'VIDEO_REWARD'
-  }
-]
-
-const localScenarioSteps = {
-  daily_checkin: [
-    {
-      stepId: 'st-001',
-      orderNo: 1,
-      stepName: '打开应用',
-      action: 'open_app',
-      params: { pkg: 'com.ss.android.ugc.aweme' },
-      timeoutMs: 5000,
-      retryPolicy: { maxRetries: 1, backoffMs: 1000 },
-      enabled: true
-    },
-    {
-      stepId: 'st-002',
-      orderNo: 2,
-      stepName: '定位签到按钮',
-      action: 'find_and_tap',
-      params: { target: 'text:签到', timeout: 5000 },
-      timeoutMs: 8000,
-      retryPolicy: { maxRetries: 2, backoffMs: 1000 },
-      enabled: true
-    }
-  ],
-  video_reward: [
-    {
-      stepId: 'st-101',
-      orderNo: 1,
-      stepName: '打开视频页',
-      action: 'open_app',
-      params: { pkg: 'com.ss.android.ugc.aweme' },
-      timeoutMs: 5000,
-      retryPolicy: { maxRetries: 1, backoffMs: 1000 },
-      enabled: true
-    },
-    {
-      stepId: 'st-102',
-      orderNo: 2,
-      stepName: '滑动观看',
-      action: 'swipe',
-      params: { from: [500, 1500], to: [500, 300], durationMs: 500 },
-      timeoutMs: 30000,
-      retryPolicy: { maxRetries: 2, backoffMs: 1500 },
-      enabled: true
-    }
-  ]
-}
-
+const localScenarioList = []
 const localTaskMeta = new Map()
-const localAlertStatus = new Map()
 
 function unwrap(resp) {
-  const payload = resp?.data || {}
-  if (payload.code && payload.code !== 'OK') {
-    const error = new Error(payload.message || '请求失败')
-    error.response = { data: payload }
-    throw error
-  }
-  return payload.data
+  return resp?.data?.data ?? resp?.data ?? null
 }
 
 function boolFlag(value) {
-  return value === 1 || value === '1' || value === true
+  if (typeof value === 'boolean') return value
+  if (value === 1 || value === '1' || value === 'true') return true
+  return false
 }
 
-function parseTimestamp(value) {
-  if (!value) return Date.now()
-  if (typeof value === 'number') return value
-  const parsed = new Date(value).getTime()
-  return Number.isNaN(parsed) ? Date.now() : parsed
+function toArrayCapabilities(value) {
+  if (Array.isArray(value)) return value
+  if (!value) return []
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return value.split(',').map((item) => item.trim()).filter(Boolean)
+    }
+  }
+  return []
 }
 
 function safeJsonStringify(value) {
-  if (value === null || value === undefined || value === '') return ''
+  if (!value) return ''
   if (typeof value === 'string') return value
   try {
-    return JSON.stringify(value)
+    return JSON.stringify(value, null, 2)
   } catch {
     return String(value)
   }
 }
 
-function toArrayCapabilities(capabilities) {
-  if (!capabilities) return []
-  if (Array.isArray(capabilities)) return capabilities
-  if (Array.isArray(capabilities.items)) return capabilities.items
-  if (typeof capabilities === 'object') return Object.keys(capabilities)
-  return [String(capabilities)]
-}
-
-function toLogLevel(event) {
-  if (event.eventType === 'FAILED') return 'ERROR'
-  if (event.errorCode) return 'WARN'
-  return 'INFO'
-}
-
-function toLogMessage(event) {
-  if (event.stageDesc) return event.stageDesc
-  if (event.errorCode) return `错误码: ${event.errorCode}`
-  if (event.thinking) return event.thinking
-  return `事件类型: ${event.eventTypeDesc || event.eventType || '未知事件'}`
+function parseTimestamp(value) {
+  if (!value) return new Date().toISOString()
+  if (typeof value === 'number') return new Date(value).toISOString()
+  return value
 }
 
 function resolveTaskConstraints(task) {
-  return task?.constraints || task?.taskConstraints || {}
+  if (task?.constraints) return task.constraints
+  if (typeof task?.constraintJson === 'string') {
+    try {
+      return JSON.parse(task.constraintJson)
+    } catch {
+      return null
+    }
+  }
+  return task?.constraintJson || null
+}
+
+function resolveTaskStatusText(status) {
+  switch (status) {
+    case 'QUEUED':
+      return '排队中'
+    case 'DISPATCHING':
+      return '派发中'
+    case 'RUNNING':
+      return '执行中'
+    case 'SUCCESS':
+      return '执行成功'
+    case 'FAIL':
+      return '执行失败'
+    case 'CANCELED':
+      return '已取消'
+    default:
+      return status || '未知状态'
+  }
 }
 
 function resolveRunStatus(run) {
@@ -163,8 +92,64 @@ function mapStepInstance(step) {
   }
 }
 
+function readEventProgress(item) {
+  return item.progress || item.progressJson || {}
+}
+
+function resolveFailureCategoryText(value) {
+  const map = {
+    ENVIRONMENT: '环境异常',
+    PERMISSION: '权限问题',
+    NETWORK: '网络异常',
+    MODEL: '模型异常',
+    ELEMENT: '元素问题',
+    PAGE_STATE: '页面状态异常',
+    ACTION_EXECUTION: '动作执行异常',
+    TIMEOUT: '执行超时',
+    SENSITIVE_SCREEN: '敏感页面拦截',
+    DATA: '数据问题',
+    UNRECOVERABLE: '不可恢复异常',
+    UNKNOWN: '未知'
+  }
+  return map[value] || '未知'
+}
+
+function resolveActionResultText(value) {
+  const map = {
+    SUCCESS: '成功',
+    TARGET_NOT_FOUND: '目标未找到',
+    NO_EFFECT: '执行无效',
+    PARTIAL: '部分完成',
+    INTERRUPTED: '执行中断',
+    INVALID_PARAM: '参数无效',
+    BLOCKED: '被阻塞',
+    SKIPPED: '已跳过',
+    UNKNOWN: '未知'
+  }
+  return map[value] || '未知'
+}
+
+function resolvePageTypeText(value) {
+  const map = {
+    UNKNOWN_PAGE: '未知页面',
+    HOME_PAGE: '首页',
+    DETAIL_PAGE: '详情页',
+    LIST_PAGE: '列表页',
+    SEARCH_PAGE: '搜索页',
+    LOGIN_PAGE: '登录页',
+    POPUP_PAGE: '弹窗页',
+    PERMISSION_PAGE: '权限页',
+    LOADING_PAGE: '加载页',
+    RESULT_PAGE: '结果页',
+    SENSITIVE_PAGE: '敏感页',
+    EXTERNAL_PAGE: '外部页面'
+  }
+  return map[value] || '未知页面'
+}
+
 function mapEvent(item) {
-  const stepNo = Number(item.stepNo || item.currentStepNo || 0)
+  const progress = readEventProgress(item)
+  const stepNo = Number(item.stepNo || item.currentStepNo || progress.stepNo || 0)
   const eventType = item.eventType || ''
   const eventTypeDesc = item.eventTypeDesc || ''
   const status = item.status || item.eventStatus || 'RUNNING'
@@ -175,6 +160,12 @@ function mapEvent(item) {
       : '执行中')
   const stepName = item.stepName || ''
   const stageDesc = item.stageDesc || `${stepNo > 0 ? `第${stepNo}步` : '步骤信息缺失'}${stepName ? `（${stepName}）` : ''}：${resultDesc}`
+  const failureCategory = item.failureCategory || progress.failureCategory || ''
+  const recoverableRaw = item.recoverable ?? progress.recoverable
+  const actionResult = item.actionResult || progress.actionResult || ''
+  const pageType = item.pageType || progress.pageType || ''
+  const pageSignature = item.pageSignature || progress.pageSignature || ''
+  const targetResolvedRaw = item.targetResolved ?? progress.targetResolved
   return {
     eventNo: item.eventNo || '',
     taskId: String(item.taskId),
@@ -198,8 +189,17 @@ function mapEvent(item) {
     sensitiveScreenDetected: boolFlag(item.sensitiveScreenDetected ?? item.isSensitiveScreen),
     errorCode: item.errorCode || '',
     errorMessage: item.errorMessage || '',
-    progress: item.progress || item.progressJson || {},
-    durationMs: item.durationMs || 0
+    progress,
+    durationMs: item.durationMs || 0,
+    failureCategory,
+    failureCategoryText: resolveFailureCategoryText(failureCategory),
+    recoverable: recoverableRaw === null || recoverableRaw === undefined ? null : boolFlag(recoverableRaw),
+    actionResult,
+    actionResultText: resolveActionResultText(actionResult),
+    pageType,
+    pageTypeText: resolvePageTypeText(pageType),
+    pageSignature,
+    targetResolved: targetResolvedRaw === null || targetResolvedRaw === undefined ? null : boolFlag(targetResolvedRaw)
   }
 }
 
@@ -360,14 +360,17 @@ export async function createTask(payload) {
     scenarioKey: payload.scenarioKey || '',
     scenarioName: localScenarioList.find((item) => item.scenarioKey === payload.scenarioKey)?.scenarioName || ''
   }
-  const requestPayload = {
-    scenarioKey: payload.scenarioKey,
-    devices: Array.isArray(payload.devices) ? payload.devices : [],
-    priority: Number(payload.priority ?? 5)
+  const req = {
+    name: payload.name,
+    type: payload.type,
+    trackType: payload.track,
+    intent: payload.intent,
+    targetDeviceIds: payload.targetDeviceIds,
+    priority: payload.priority,
+    constraints: payload.constraints,
+    commandTemplate: payload.commandTemplate
   }
-  if (payload.constraints) requestPayload.constraints = payload.constraints
-  if (payload.observability) requestPayload.observability = payload.observability
-  const resp = await api.post('/api/tasks', requestPayload)
+  const resp = await api.post('/api/tasks', req)
   const data = unwrap(resp) || {}
   const taskId = String(data.taskId || '')
   if (taskId) {
@@ -377,251 +380,88 @@ export async function createTask(payload) {
     taskId,
     taskNo: data.taskNo || '',
     status: data.status || 'QUEUED',
-    scenarioKey: taskMeta.scenarioKey,
-    scenarioName: taskMeta.scenarioName
+    statusText: resolveTaskStatusText(data.status || 'QUEUED')
   }
 }
 
+export async function cancelTask(taskId) {
+  await api.post(`/api/tasks/${taskId}/cancel`)
+  return true
+}
+
 export async function getTaskDetail(taskId) {
-  const [detailResp, eventsResp] = await Promise.all([
+  const [detailResp, eventResp] = await Promise.all([
     api.get(`/api/tasks/${taskId}`),
-    api.get('/api/devices/events')
+    api.get('/api/events', { params: { taskId } })
   ])
-  const detail = unwrap(detailResp)
-  if (!detail?.task) return null
-  const constraints = resolveTaskConstraints(detail.task)
-  const events = (unwrap(eventsResp) || [])
-    .filter((event) => String(event.taskId) === String(taskId))
-    .map(mapEvent)
-    .sort((a, b) => b.timestamp - a.timestamp)
-  const runs = detail.deviceRuns || []
+  const detail = unwrap(detailResp) || {}
+  const eventsRaw = unwrap(eventResp) || []
+  const runs = (detail.deviceRuns || []).map((run) => ({
+    ...run,
+    statusText: resolveTaskStatusText(resolveRunStatus(run))
+  }))
+  const events = eventsRaw.map(mapEvent)
+  const stepInstances = (detail.steps || detail.stepInstances || []).map(mapStepInstance)
   const evidences = events
     .filter((item) => item.screenshotUrl)
     .map((item) => ({
-      taskId: item.taskId,
+      timestamp: item.timestamp,
       deviceId: item.deviceId,
       stepInstanceId: item.stepInstanceId,
       stepNo: item.stepNo,
-      timestamp: item.timestamp,
       screenshotUrl: item.screenshotUrl
     }))
-  const elementSnapshots = events
-    .filter((item) => item.elementJson)
-    .map((item) => ({
-      taskId: item.taskId,
-      deviceId: item.deviceId,
-      stepNo: item.stepNo,
-      timestamp: item.timestamp,
-      elementJson: item.elementJson
+  const alerts = events
+    .filter((event) => event.status === 'FAIL' || event.errorCode)
+    .map((event) => ({
+      id: randomUUID(),
+      taskId: String(taskId),
+      deviceId: event.deviceId,
+      type: toAlertType(event),
+      severity: 'HIGH',
+      code: event.errorCode || event.eventType,
+      message: event.errorMessage || event.stageDesc,
+      createdAt: event.timestamp
     }))
   return {
-    taskId: String(detail.task.id),
-    taskNo: detail.task.taskNo || '',
-    name: detail.task.name || '',
-    type: detail.task.type || '',
-    track: detail.task.trackType || '',
-    status: detail.task.status || '',
-    scenarioKey: constraints?.scenarioKey || detail.task.scenarioKey || localTaskMeta.get(String(detail.task.id))?.scenarioKey || '',
-    scenarioName:
-      constraints?.scenarioName || detail.task.scenarioName || localTaskMeta.get(String(detail.task.id))?.scenarioName || '',
-    priority: detail.task.priority ?? 5,
-    intent: detail.task.intent || '',
-    createdAt: parseTimestamp(detail.task.gmtCreate),
-    constraints,
-    successCriteria: detail.task.successCriteria || {},
-    observability: detail.task.observability || {},
-    safetyRails: detail.task.safetyRails || {},
-    rhythm: detail.task.rhythm || {},
-    devicesRuns: runs.map((run) => ({
-      deviceId: run.deviceCode || String(run.deviceId || '--'),
-      status: resolveRunStatus(run),
-      retry: run.retryCount || 0,
-      errorCode: run.errorCode || '',
-      errorMessage: run.errorMessage || '',
-      progress: run.progress || {}
-    })),
-    commands: (detail.commands || detail.stepInstances || []).map(mapStepInstance),
+    taskId: String(detail.id || taskId),
+    taskNo: detail.taskNo || '',
+    name: detail.name || '',
+    type: detail.type || '',
+    track: detail.trackType || '',
+    status: detail.status || 'QUEUED',
+    statusText: resolveTaskStatusText(detail.status || 'QUEUED'),
+    scenarioKey: resolveTaskConstraints(detail)?.scenarioKey || detail.scenarioKey || '',
+    scenarioName: resolveTaskConstraints(detail)?.scenarioName || detail.scenarioName || localTaskMeta.get(String(taskId))?.scenarioName || '',
+    priority: detail.priority ?? 5,
+    intent: detail.intent || '',
+    createdAt: parseTimestamp(detail.gmtCreate),
+    stepInstances,
+    deviceRuns: runs,
     events,
     evidences,
-    elementSnapshots,
+    alerts,
     metrics: calcTaskMetrics(events, runs)
   }
 }
 
-export async function getEvents() {
-  const resp = await api.get('/api/devices/events')
-  return (unwrap(resp) || []).map(mapEvent).sort((a, b) => b.timestamp - a.timestamp)
-}
-
-export async function getLogs({ taskId = '', deviceId = '' } = {}) {
-  const eventStatus = arguments[0]?.eventStatus || ''
-  const errorCode = arguments[0]?.errorCode || ''
-  const startAt = Number(arguments[0]?.startAt || 0)
-  const endAt = Number(arguments[0]?.endAt || 0)
-  const events = await getEvents()
-  return events
-    .filter((item) => (!taskId || item.taskId === String(taskId)) && (!deviceId || item.deviceId === deviceId))
-    .filter((item) => (!eventStatus || item.status === eventStatus) && (!errorCode || (item.errorCode || '').includes(errorCode)))
-    .filter((item) => (!startAt || item.timestamp >= startAt) && (!endAt || item.timestamp <= endAt))
-    .map((item) => ({
-      timestamp: item.timestamp,
-      taskId: item.taskId,
-      deviceId: item.deviceId,
-      level: toLogLevel(item),
-      code: item.errorCode,
-      message: toLogMessage(item),
-      status: item.status,
-      commandId: item.commandId,
-      thinkingText: item.thinkingText || item.thinking || '',
-      screenshotUrl: item.screenshotUrl,
-      traceJson: item.traceJson || '',
-      elementJson: item.elementJson || ''
-    }))
-}
-
-function toAlertLevel(alertType) {
-  if (alertType === 'TIMEOUT') return 'P2'
-  if (alertType === 'READINESS') return 'P3'
-  return 'P1'
-}
-
-export async function getAlerts({ taskId = '', alertLevel = '', alertType = '', alertStatus = '', startAt = 0, endAt = 0 } = {}) {
-  const events = await getEvents()
-  return events
-    .filter((item) => item.status === 'FAIL' || item.errorCode)
-    .filter((item) => !taskId || item.taskId === String(taskId))
-    .map((item) => {
-      const id = `${item.taskId}-${item.deviceId}-${item.timestamp}`
-      const type = toAlertType(item)
-      return {
-      id,
-      createdAt: item.timestamp,
-      taskId: item.taskId,
-      deviceId: item.deviceId,
-      type,
-      level: toAlertLevel(type),
-      code: item.errorCode || 'UNKNOWN_ERROR',
-      status: localAlertStatus.get(id) || 'OPEN',
-      reason: item.thinking || '执行阶段异常'
-      }
-    })
-    .filter((item) => (!alertLevel || item.level === alertLevel) && (!alertType || item.type === alertType))
-    .filter((item) => !alertStatus || item.status === alertStatus)
-    .filter((item) => (!startAt || item.createdAt >= startAt) && (!endAt || item.createdAt <= endAt))
-}
-
-export async function ackAlert(alertId) {
-  localAlertStatus.set(alertId, 'ACK')
-  return { ok: true }
-}
-
-export async function closeAlert(alertId) {
-  localAlertStatus.set(alertId, 'CLOSED')
-  return { ok: true }
+export async function getTaskAlerts(taskId) {
+  const detail = await getTaskDetail(taskId)
+  return detail.alerts
 }
 
 export async function getScenarios() {
-  try {
-    const resp = await api.get('/api/scenarios')
-    const data = unwrap(resp) || []
-    const list = Array.isArray(data) ? data : data.records || []
-    return list.map(normalizeScenario)
-  } catch {
-    if (!allowMockFallback) throw new Error('获取场景失败，请检查后端服务连接')
-    return localScenarioList.map((item) => ({ ...item }))
-  }
+  const resp = await api.get('/api/scenarios')
+  const list = (unwrap(resp) || []).map(normalizeScenario)
+  localScenarioList.splice(0, localScenarioList.length, ...list)
+  return list
 }
 
-export async function createScenario(payload) {
-  try {
-    const resp = await api.post('/api/scenarios', {
-      scenarioName: payload.scenarioName,
-      scenarioKey: payload.scenarioKey,
-      description: payload.description || ''
-    })
-    return normalizeScenario(unwrap(resp) || {})
-  } catch {
-    if (!allowMockFallback) throw new Error('创建场景失败，请检查后端服务连接')
-    const scenario = {
-      scenarioId: `sc-${Date.now()}`,
-      scenarioKey: payload.scenarioKey,
-      scenarioName: payload.scenarioName,
-      description: payload.description || '',
-      status: 'DRAFT',
-      versionNo: 1,
-      updatedAt: new Date().toISOString(),
-      taskType: 'CHECKIN'
-    }
-    localScenarioList.unshift(scenario)
-    localScenarioSteps[scenario.scenarioKey] = []
-    return scenario
-  }
-}
-
-export async function getScenarioDetail(key) {
-  try {
-    const resp = await api.get(`/api/scenarios/${key}`)
-    const detail = unwrap(resp) || {}
-    const scenario = normalizeScenario(detail.scenario || detail)
-    return {
-      ...scenario,
-      steps: (detail.steps || []).map(normalizeStep).sort((a, b) => a.orderNo - b.orderNo)
-    }
-  } catch {
-    if (!allowMockFallback) throw new Error('读取场景详情失败，请检查后端服务连接')
-    const scenario = localScenarioList.find((item) => item.scenarioKey === key)
-    if (!scenario) return null
-    return {
-      ...scenario,
-      steps: (localScenarioSteps[key] || []).map(normalizeStep).sort((a, b) => a.orderNo - b.orderNo)
-    }
-  }
-}
-
-export async function saveScenarioSteps(key, steps) {
-  const ordered = steps
-    .map((item, index) => normalizeStep({ ...item, orderNo: index + 1 }, index))
-    .sort((a, b) => a.orderNo - b.orderNo)
-  try {
-    const resp = await api.put(`/api/scenarios/${key}/steps`, {
-      steps: ordered.map((item) => ({
-        stepId: item.stepId,
-        stepNo: item.orderNo,
-        stepName: item.stepName,
-        actionCode: item.action,
-        actionParams: item.params,
-        timeoutMs: item.timeoutMs,
-        retryMax: Number(item.retryPolicy?.maxRetries || 0),
-        retryBackoffMs: Number(item.retryPolicy?.backoffMs || 1000),
-        enabled: item.enabled
-      }))
-    })
-    unwrap(resp)
-  } catch (error) {
-    if (error?.response?.data?.code && error?.response?.data?.code !== 'OK') throw error
-    if (!allowMockFallback) throw new Error('保存场景步骤失败，请检查后端服务连接')
-    localScenarioSteps[key] = ordered
-    const scenario = localScenarioList.find((item) => item.scenarioKey === key)
-    if (scenario) {
-      scenario.versionNo += 1
-      scenario.updatedAt = new Date().toISOString()
-      scenario.status = 'ACTIVE'
-    }
-  }
-  return { ok: true }
-}
-
-export async function publishScenario(key) {
-  try {
-    const resp = await api.post(`/api/scenarios/${key}/publish`)
-    return normalizeScenario(unwrap(resp) || {})
-  } catch {
-    if (!allowMockFallback) throw new Error('发布场景失败，请检查后端服务连接')
-    const scenario = localScenarioList.find((item) => item.scenarioKey === key)
-    if (!scenario) throw new Error('场景不存在')
-    scenario.status = 'ACTIVE'
-    scenario.versionNo = Number(scenario.versionNo || 0) + 1
-    scenario.updatedAt = new Date().toISOString()
-    return { ...scenario }
+export async function getScenarioDetail(scenarioId) {
+  const resp = await api.get(`/api/scenarios/${scenarioId}`)
+  const raw = unwrap(resp) || {}
+  return {
+    ...normalizeScenario(raw),
+    steps: (raw.steps || []).map(normalizeStep)
   }
 }

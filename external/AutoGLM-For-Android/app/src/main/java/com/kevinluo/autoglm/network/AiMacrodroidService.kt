@@ -474,6 +474,7 @@ class AiMacrodroidService : Service() {
             }
             val rawErrorMessage = event.data?.toString().orEmpty()
             val guardTimeout = runtime?.guardCancelled == true
+            val normalizedErrorMessage = if (guardTimeout) runtime?.guardCancelReason ?: rawErrorMessage else rawErrorMessage
             val errorCode = if (event.type == TaskEventType.FAILED) {
                 if (guardTimeout) "MODEL_TIMEOUT" else mapErrorCode(rawErrorMessage)
             } else null
@@ -483,14 +484,17 @@ class AiMacrodroidService : Service() {
             val commandId = runtime?.currentStepNo?.toString()
             val screenshotUrl = runtime?.let { resolveScreenshotUrlForUpload(it) }
             val thinking = runtime?.latestThinking
-            val progress = buildJsonObject {
-                put("attempt", runtime?.attempt ?: 1)
-                put("stepNo", runtime?.currentStepNo ?: -1)
-            }
+            val progress = buildStepDecisionProgress(
+                runtime = runtime,
+                eventType = event.type,
+                errorCode = errorCode,
+                errorMessage = normalizedErrorMessage,
+                guardTimeout = guardTimeout
+            )
             val trace = listOf(
                 buildJsonObject {
                     put("eventType", event.type.name)
-                    put("message", if (guardTimeout) runtime?.guardCancelReason ?: rawErrorMessage else rawErrorMessage)
+                    put("message", normalizedErrorMessage)
                     put("timestamp", event.timestamp)
                 }
             )
@@ -503,10 +507,10 @@ class AiMacrodroidService : Service() {
                 durationMs = durationMs,
                 screenshotUrl = screenshotUrl,
                 errorCode = errorCode,
-                errorMessage = if (event.type == TaskEventType.FAILED) rawErrorMessage else null,
+                errorMessage = if (event.type == TaskEventType.FAILED) normalizedErrorMessage else null,
                 trace = trace,
                 thinking = thinking,
-                sensitiveScreenDetected = detectSensitiveScreen(rawErrorMessage),
+                sensitiveScreenDetected = detectSensitiveScreen(normalizedErrorMessage),
                 progress = progress,
                 hmac = null,
             )
@@ -642,6 +646,32 @@ class AiMacrodroidService : Service() {
         return !deadlineExceeded
     }
 
+    private fun buildStepDecisionProgress(
+        runtime: RemoteTaskRuntime?,
+        eventType: TaskEventType,
+        errorCode: String?,
+        errorMessage: String,
+        guardTimeout: Boolean
+    ): JsonObject {
+        val failureEvent = eventType == TaskEventType.FAILED
+        val pageType = resolvePageType(errorMessage, failureEvent)
+        val pageSignature = resolvePageSignature(runtime, pageType, errorMessage)
+        val targetResolved = resolveTargetResolved(eventType, errorCode, errorMessage)
+        val actionResult = resolveActionResult(eventType, errorCode, errorMessage, guardTimeout)
+        val recoverable = resolveRecoverable(errorCode, errorMessage, guardTimeout)
+        val failureCategory = resolveFailureCategory(errorCode, errorMessage, pageType, guardTimeout)
+        return buildJsonObject {
+            put("attempt", runtime?.attempt ?: 1)
+            put("stepNo", runtime?.currentStepNo ?: -1)
+            put("pageType", pageType)
+            put("pageSignature", pageSignature)
+            put("targetResolved", targetResolved)
+            put("actionResult", actionResult)
+            put("recoverable", recoverable)
+            put("failureCategory", failureCategory)
+        }
+    }
+
     private fun mapErrorCode(errorMessage: String): String {
         val msg = errorMessage.lowercase()
         return when {
@@ -652,6 +682,7 @@ class AiMacrodroidService : Service() {
             msg.contains("connection") || msg.contains("network") || msg.contains("host") -> "API_CONNECTION_FAILED"
             msg.contains("timeout") || msg.contains("超时") -> "MODEL_TIMEOUT"
             msg.contains("unsupported") -> "STEP_ACTION_UNSUPPORTED"
+            msg.contains("not found") || msg.contains("找不到") || msg.contains("未找到") -> "ELEMENT_NOT_FOUND"
             msg.contains("param") || msg.contains("invalid") -> "STEP_PARAM_INVALID"
             else -> "STEP_PARAM_INVALID"
         }
@@ -662,9 +693,132 @@ class AiMacrodroidService : Service() {
         return msg.contains("sensitive") || msg.contains("隐私") || msg.contains("敏感")
     }
 
+    private fun resolvePageType(errorMessage: String, failureEvent: Boolean): String {
+        val msg = errorMessage.lowercase()
+        if (detectSensitiveScreen(errorMessage)) {
+            return "SENSITIVE_PAGE"
+        }
+        return when {
+            msg.contains("permission") || msg.contains("授权") || msg.contains("权限") -> "PERMISSION_PAGE"
+            msg.contains("login") || msg.contains("登录") -> "LOGIN_PAGE"
+            msg.contains("popup") || msg.contains("弹窗") || msg.contains("dialog") -> "POPUP_PAGE"
+            msg.contains("loading") || msg.contains("加载") -> "LOADING_PAGE"
+            msg.contains("search") || msg.contains("搜索") -> "SEARCH_PAGE"
+            msg.contains("detail") || msg.contains("详情") -> "DETAIL_PAGE"
+            msg.contains("list") || msg.contains("列表") -> "LIST_PAGE"
+            msg.contains("home") || msg.contains("首页") -> "HOME_PAGE"
+            failureEvent -> "UNKNOWN_PAGE"
+            else -> "UNKNOWN_PAGE"
+        }
+    }
+
+    private fun resolvePageSignature(runtime: RemoteTaskRuntime?, pageType: String, errorMessage: String): String {
+        val stepPart = runtime?.currentStepNo?.takeIf { it > 0 }?.let { "step-$it" } ?: "step-unknown"
+        val errorPart = when {
+            errorMessage.isBlank() -> "normal"
+            detectSensitiveScreen(errorMessage) -> "sensitive"
+            else -> sanitizeSignatureToken(errorMessage)
+        }
+        return "$pageType|$stepPart|$errorPart"
+    }
+
+    private fun sanitizeSignatureToken(raw: String): String {
+        val normalized = raw.lowercase()
+            .replace(Regex("[^a-z0-9\u4e00-\u9fa5]+"), "-")
+            .trim('-')
+        return if (normalized.isBlank()) {
+            "unknown"
+        } else {
+            normalized.take(48)
+        }
+    }
+
+    private fun resolveTargetResolved(eventType: TaskEventType, errorCode: String?, errorMessage: String): Boolean {
+        if (eventType == TaskEventType.COMPLETED || eventType == TaskEventType.ACTION_EXECUTED) {
+            return true
+        }
+        val msg = errorMessage.lowercase()
+        if (errorCode == "ELEMENT_NOT_FOUND" || msg.contains("not found") || msg.contains("未找到") || msg.contains("找不到")) {
+            return false
+        }
+        return eventType != TaskEventType.FAILED
+    }
+
+    private fun resolveActionResult(
+        eventType: TaskEventType,
+        errorCode: String?,
+        errorMessage: String,
+        guardTimeout: Boolean
+    ): String {
+        if (eventType == TaskEventType.COMPLETED) {
+            return "SUCCESS"
+        }
+        if (eventType == TaskEventType.ACTION_EXECUTED) {
+            return "PARTIAL"
+        }
+        if (eventType != TaskEventType.FAILED) {
+            return "UNKNOWN"
+        }
+        val msg = errorMessage.lowercase()
+        return when {
+            guardTimeout || errorCode == "MODEL_TIMEOUT" || msg.contains("timeout") || msg.contains("超时") -> "INTERRUPTED"
+            errorCode == "ELEMENT_NOT_FOUND" || msg.contains("not found") || msg.contains("未找到") || msg.contains("找不到") -> "TARGET_NOT_FOUND"
+            errorCode == "STEP_PARAM_INVALID" || msg.contains("invalid") || msg.contains("param") -> "INVALID_PARAM"
+            errorCode == "STEP_ACTION_UNSUPPORTED" || msg.contains("unsupported") -> "BLOCKED"
+            errorCode == "SHIZUKU_NOT_RUNNING" || errorCode == "OVERLAY_NOT_GRANTED" || errorCode == "KEYBOARD_NOT_ENABLED" -> "BLOCKED"
+            errorCode == "SENSITIVE_SCREEN_BLACKOUT" -> "BLOCKED"
+            else -> "NO_EFFECT"
+        }
+    }
+
+    private fun resolveRecoverable(errorCode: String?, errorMessage: String, guardTimeout: Boolean): Boolean {
+        if (guardTimeout) {
+            return true
+        }
+        val msg = errorMessage.lowercase()
+        return when (errorCode) {
+            "API_CONNECTION_FAILED", "MODEL_TIMEOUT", "ELEMENT_NOT_FOUND" -> true
+            "SHIZUKU_NOT_RUNNING", "OVERLAY_NOT_GRANTED", "KEYBOARD_NOT_ENABLED", "SENSITIVE_SCREEN_BLACKOUT" -> false
+            else -> {
+                !(msg.contains("invalid") || msg.contains("unsupported") || msg.contains("敏感"))
+            }
+        }
+    }
+
+    private fun resolveFailureCategory(
+        errorCode: String?,
+        errorMessage: String,
+        pageType: String,
+        guardTimeout: Boolean
+    ): String {
+        val msg = errorMessage.lowercase()
+        if (guardTimeout || errorCode == "MODEL_TIMEOUT" || msg.contains("timeout") || msg.contains("超时")) {
+            return "TIMEOUT"
+        }
+        if (pageType == "SENSITIVE_PAGE" || errorCode == "SENSITIVE_SCREEN_BLACKOUT") {
+            return "SENSITIVE_SCREEN"
+        }
+        return when {
+            errorCode == "SHIZUKU_NOT_RUNNING" || errorCode == "OVERLAY_NOT_GRANTED" || errorCode == "KEYBOARD_NOT_ENABLED" || msg.contains("permission") || msg.contains("权限") -> "PERMISSION"
+            errorCode == "API_CONNECTION_FAILED" || msg.contains("network") || msg.contains("connection") || msg.contains("host") -> "NETWORK"
+            errorCode == "ELEMENT_NOT_FOUND" || msg.contains("not found") || msg.contains("未找到") || msg.contains("找不到") -> "ELEMENT"
+            errorCode == "STEP_ACTION_UNSUPPORTED" -> "ACTION_EXECUTION"
+            errorCode == "STEP_PARAM_INVALID" || msg.contains("invalid") || msg.contains("param") -> "DATA"
+            msg.contains("page") || msg.contains("页面") || pageType != "UNKNOWN_PAGE" -> "PAGE_STATE"
+            else -> "UNKNOWN"
+        }
+    }
+
     private suspend fun reportSyntheticFail(taskId: String, errorCode: String, message: String) {
         val deviceManager = ComponentManager.getInstance(this).deviceManager
         val taskIdLong = taskId.toLongOrNull() ?: return
+        val progress = buildStepDecisionProgress(
+            runtime = synchronized(runtimeLock) { taskRuntimeMap[taskId] },
+            eventType = TaskEventType.FAILED,
+            errorCode = errorCode,
+            errorMessage = message,
+            guardTimeout = errorCode == "MODEL_TIMEOUT"
+        )
         val req = EventReq(
             eventNo = generateEventNo(taskId, System.currentTimeMillis()),
             taskId = taskIdLong,
@@ -679,6 +833,7 @@ class AiMacrodroidService : Service() {
                     put("timestamp", System.currentTimeMillis())
                 }
             ),
+            progress = progress,
             hmac = null,
         )
         val signedReq = signEventReq(deviceManager.deviceId, req)

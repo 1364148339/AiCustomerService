@@ -96,6 +96,12 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
         event.setThinkingText(req.getThinking());
         event.setIsSensitiveScreen(Boolean.TRUE.equals(req.getSensitiveScreenDetected()) ? 1 : 0);
         event.setProgressJson(req.getProgress());
+        event.setFailureCategory(readStringProgress(req.getProgress(), "failureCategory"));
+        event.setRecoverable(readBooleanProgress(req.getProgress(), "recoverable"));
+        event.setActionResult(readStringProgress(req.getProgress(), "actionResult"));
+        event.setPageType(readStringProgress(req.getProgress(), "pageType"));
+        event.setPageSignature(readStringProgress(req.getProgress(), "pageSignature"));
+        event.setTargetResolved(readBooleanProgress(req.getProgress(), "targetResolved"));
         event.setScreenshotUrl(req.getScreenshotUrl());
         event.setHmacSignature(req.getHmac());
         this.save(event);
@@ -224,6 +230,12 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
             if (event.getOccurredAt() != null) {
                 event.setEventTimestamp(event.getOccurredAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
             }
+            event.setFailureCategory(firstNonBlank(event.getFailureCategory(), readStringProgress(event.getProgressJson(), "failureCategory")));
+            event.setRecoverable(firstNonNull(event.getRecoverable(), readBooleanProgress(event.getProgressJson(), "recoverable")));
+            event.setActionResult(firstNonBlank(event.getActionResult(), readStringProgress(event.getProgressJson(), "actionResult")));
+            event.setPageType(firstNonBlank(event.getPageType(), readStringProgress(event.getProgressJson(), "pageType")));
+            event.setPageSignature(firstNonBlank(event.getPageSignature(), readStringProgress(event.getProgressJson(), "pageSignature")));
+            event.setTargetResolved(firstNonNull(event.getTargetResolved(), readBooleanProgress(event.getProgressJson(), "targetResolved")));
             event.setResultDesc(resolveResultDesc(event.getEventStatus()));
             event.setStageDesc(resolveStageDesc(event));
         }
@@ -417,5 +429,49 @@ public class RunEventServiceImpl extends ServiceImpl<RunEventMapper, RunEvent> i
             return RunEventType.FAILED;
         }
         return RunEventType.UNKNOWN;
+    }
+
+    private String readStringProgress(Map<String, Object> progress, String key) {
+        if (progress == null || !progress.containsKey(key)) {
+            return null;
+        }
+        Object value = progress.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private Boolean readBooleanProgress(Map<String, Object> progress, String key) {
+        if (progress == null || !progress.containsKey(key)) {
+            return null;
+        }
+        Object value = progress.get(key);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Boolean boolValue) {
+            return boolValue;
+        }
+        String text = String.valueOf(value).trim();
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if ("1".equals(text) || "true".equalsIgnoreCase(text) || "yes".equalsIgnoreCase(text)) {
+            return true;
+        }
+        if ("0".equals(text) || "false".equalsIgnoreCase(text) || "no".equalsIgnoreCase(text)) {
+            return false;
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String first, String second) {
+        return StringUtils.hasText(first) ? first : second;
+    }
+
+    private Boolean firstNonNull(Boolean first, Boolean second) {
+        return first != null ? first : second;
     }
 }
