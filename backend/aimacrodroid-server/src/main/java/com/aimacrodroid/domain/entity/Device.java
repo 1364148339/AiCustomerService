@@ -24,6 +24,11 @@ public class Device extends BaseEntity {
     private String deviceCode;
 
     /**
+     * 设备别名
+     */
+    private String alias;
+
+    /**
      * 设备品牌
      */
     private String brand;

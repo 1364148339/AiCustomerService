@@ -30,6 +30,12 @@ const deviceOptions = computed(() => devicesStore.list)
 const selectedScenario = computed(() =>
   scenarioOptions.value.find((item) => item.scenarioKey === createForm.value.scenarioKey) || null
 )
+const metrics = computed(() => ({
+  total: rows.value.length,
+  running: rows.value.filter((item) => item.status === 'RUNNING').length,
+  success: rows.value.filter((item) => item.status === 'SUCCESS').length,
+  fail: rows.value.filter((item) => item.status === 'FAIL').length
+}))
 
 const typeLabelMap = {
   CHECKIN: '签到',
@@ -141,34 +147,63 @@ watch(
 </script>
 
 <template>
-  <div class="task-list-view">
-    <el-card shadow="never">
+  <div class="page-shell task-list-view">
+    <div class="metric-grid">
+      <el-card shadow="hover" class="metric-card metric-card--blue">
+        <div class="metric-card__label">任务总数</div>
+        <div class="metric-card__value">{{ metrics.total }}</div>
+        <div class="metric-card__sub">当前筛选结果中的全部任务</div>
+      </el-card>
+      <el-card shadow="hover" class="metric-card metric-card--orange">
+        <div class="metric-card__label">运行中</div>
+        <div class="metric-card__value">{{ metrics.running }}</div>
+        <div class="metric-card__sub">处于执行或调度中的任务</div>
+      </el-card>
+      <el-card shadow="hover" class="metric-card metric-card--green">
+        <div class="metric-card__label">成功完成</div>
+        <div class="metric-card__value">{{ metrics.success }}</div>
+        <div class="metric-card__sub">执行成功的任务数量</div>
+      </el-card>
+      <el-card shadow="hover" class="metric-card metric-card--purple">
+        <div class="metric-card__label">失败任务</div>
+        <div class="metric-card__value">{{ metrics.fail }}</div>
+        <div class="metric-card__sub">需要回看日志或告警</div>
+      </el-card>
+    </div>
+
+    <el-card shadow="never" class="page-card">
       <template #header>
-        <div class="card-header">
-          <span>任务列表</span>
-          <div class="header-actions">
+        <div class="page-header">
+          <div class="page-header__main">
+            <div class="page-header__title">任务列表</div>
+            <div class="page-header__desc">统一查看任务状态、执行进度，并快速跳转到详情、日志与告警。</div>
+          </div>
+          <div class="page-header__actions">
             <el-button @click="tasksStore.refreshList">手动刷新</el-button>
             <el-button type="primary" @click="openCreateDialog()">新建任务</el-button>
           </div>
         </div>
       </template>
 
-      <el-form :inline="true" :model="filters" class="filter-bar">
-        <el-form-item label="关键字">
-          <el-input v-model="filters.keyword" clearable placeholder="taskId/任务编号/场景" style="width: 280px" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" clearable placeholder="全部状态" style="width: 160px">
-            <el-option label="QUEUED" value="QUEUED" />
-            <el-option label="DISPATCHING" value="DISPATCHING" />
-            <el-option label="RUNNING" value="RUNNING" />
-            <el-option label="SUCCESS" value="SUCCESS" />
-            <el-option label="FAIL" value="FAIL" />
-          </el-select>
-        </el-form-item>
-      </el-form>
+      <div class="filter-panel">
+        <div class="filter-panel__title">筛选条件</div>
+        <el-form :inline="true" :model="filters" class="filter-form">
+          <el-form-item label="关键字">
+            <el-input v-model="filters.keyword" clearable placeholder="taskId/任务编号/场景" style="width: 280px" />
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-model="filters.status" clearable placeholder="全部状态" style="width: 160px">
+              <el-option label="QUEUED" value="QUEUED" />
+              <el-option label="DISPATCHING" value="DISPATCHING" />
+              <el-option label="RUNNING" value="RUNNING" />
+              <el-option label="SUCCESS" value="SUCCESS" />
+              <el-option label="FAIL" value="FAIL" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
 
-      <el-table :data="rows" border v-loading="loading">
+      <el-table :data="rows" border v-loading="loading" class="data-table">
         <el-table-column label="任务编号" min-width="160">
           <template #default="{ row }">
             {{ row.taskNo || row.taskId }}
@@ -187,7 +222,7 @@ watch(
         </el-table-column>
         <el-table-column label="状态" width="120" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)">{{ row.status }}</el-tag>
+            <el-tag :type="statusTagType(row.status)" effect="light" round>{{ row.status }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="进度看板" min-width="300">
@@ -275,18 +310,6 @@ watch(
 </template>
 
 <style scoped>
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.header-actions {
-  display: flex;
-  gap: 8px;
-}
-.filter-bar {
-  margin-bottom: 10px;
-}
 .progress-cell {
   display: flex;
   flex-direction: column;

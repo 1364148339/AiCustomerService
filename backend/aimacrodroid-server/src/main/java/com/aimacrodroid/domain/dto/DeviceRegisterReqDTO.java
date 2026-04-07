@@ -13,6 +13,9 @@ public class DeviceRegisterReqDTO {
     @Schema(description = "设备唯一标识", example = "dev-01")
     private String deviceId;
 
+    @Schema(description = "设备别名", example = "前台测试机")
+    private String alias;
+
     @Schema(description = "设备品牌", example = "Xiaomi")
     private String brand;
 

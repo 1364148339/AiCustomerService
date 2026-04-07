@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { createTask, getDevices } from '../mock/api'
+import { createTask, getDevices, updateDeviceAlias } from '../mock/api'
 import { useAppStore } from './app'
 
 export const useDevicesStore = defineStore('devices', () => {
@@ -20,6 +20,7 @@ export const useDevicesStore = defineStore('devices', () => {
       const matchesKeyword =
         !keyword ||
         item.id.toLowerCase().includes(keyword) ||
+        (item.alias || '').toLowerCase().includes(keyword) ||
         `${item.brand} ${item.model}`.toLowerCase().includes(keyword) ||
         (item.foregroundPkg || '').toLowerCase().includes(keyword)
       const matchesOnline =
@@ -47,6 +48,15 @@ export const useDevicesStore = defineStore('devices', () => {
     }
   }
 
+  async function renameDevice(deviceId, alias) {
+    await updateDeviceAlias(deviceId, alias)
+    const target = list.value.find((item) => item.id === deviceId)
+    if (target) {
+      target.alias = alias
+      target.displayName = alias || deviceId
+    }
+  }
+
   async function dispatchReadinessHint(deviceId) {
     await createTask({
       type: 'READINESS_HINT',
@@ -67,6 +77,7 @@ export const useDevicesStore = defineStore('devices', () => {
     loading,
     filters,
     refresh,
+    renameDevice,
     dispatchReadinessHint
   }
 })

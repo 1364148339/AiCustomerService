@@ -19,6 +19,13 @@ const createForm = ref({
   description: ''
 })
 
+const metrics = computed(() => ({
+  total: rows.value.length,
+  active: scenariosStore.activeCount,
+  editing: detailVisible.value ? 1 : 0,
+  draft: rows.value.filter((item) => item.status !== 'ACTIVE').length
+}))
+
 function statusTagType(status) {
   if (status === 'ACTIVE') return 'success'
   if (status === 'DEPRECATED') return 'warning'
@@ -75,26 +82,52 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="scenarios-view">
-    <el-card shadow="never">
+  <div class="page-shell scenarios-view">
+    <div class="metric-grid">
+      <el-card shadow="hover" class="metric-card metric-card--blue">
+        <div class="metric-card__label">场景总数</div>
+        <div class="metric-card__value">{{ metrics.total }}</div>
+        <div class="metric-card__sub">包含已发布与草稿场景</div>
+      </el-card>
+      <el-card shadow="hover" class="metric-card metric-card--green">
+        <div class="metric-card__label">已发布</div>
+        <div class="metric-card__value">{{ metrics.active }}</div>
+        <div class="metric-card__sub">可直接用于任务编排</div>
+      </el-card>
+      <el-card shadow="hover" class="metric-card metric-card--purple">
+        <div class="metric-card__label">编辑中</div>
+        <div class="metric-card__value">{{ metrics.editing }}</div>
+        <div class="metric-card__sub">当前抽屉中正在编辑</div>
+      </el-card>
+      <el-card shadow="hover" class="metric-card metric-card--orange">
+        <div class="metric-card__label">待发布</div>
+        <div class="metric-card__value">{{ metrics.draft }}</div>
+        <div class="metric-card__sub">尚未激活的场景版本</div>
+      </el-card>
+    </div>
+
+    <el-card shadow="never" class="page-card">
       <template #header>
-        <div class="card-header">
-          <span>场景管理与步骤编排</span>
-          <div class="header-actions">
-            <el-tag type="success">ACTIVE {{ scenariosStore.activeCount }}</el-tag>
+        <div class="page-header">
+          <div class="page-header__main">
+            <div class="page-header__title">场景管理与步骤编排</div>
+            <div class="page-header__desc">统一查看场景状态、版本信息，并在抽屉中直接编排执行步骤。</div>
+          </div>
+          <div class="page-header__actions">
+            <el-tag type="success" effect="plain" round>ACTIVE {{ scenariosStore.activeCount }}</el-tag>
             <el-button @click="scenariosStore.refreshScenarios" :loading="loading">刷新</el-button>
             <el-button type="primary" @click="createVisible = true">新建场景</el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="rows" v-loading="loading" border>
+      <el-table :data="rows" v-loading="loading" border class="data-table">
         <el-table-column prop="scenarioKey" label="场景标识" min-width="160" />
         <el-table-column prop="scenarioName" label="场景名称" min-width="180" />
         <el-table-column prop="versionNo" label="版本" width="90" align="center" />
         <el-table-column label="状态" width="120" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)">{{ row.status }}</el-tag>
+            <el-tag :type="statusTagType(row.status)" effect="light" round>{{ row.status }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="更新时间" min-width="180">
@@ -138,11 +171,11 @@ onMounted(async () => {
 
     <el-drawer v-model="detailVisible" :title="detail ? `${detail.scenarioName} (${detail.scenarioKey})` : '场景详情'" size="70%">
       <div v-loading="detailLoading">
-        <div class="detail-actions">
+        <div class="drawer-toolbar">
           <el-button @click="scenariosStore.appendStep">新增步骤</el-button>
           <el-button type="primary" :loading="saving" @click="saveSteps">保存步骤</el-button>
         </div>
-        <el-table :data="stepsDraft" border>
+        <el-table :data="stepsDraft" border class="data-table">
           <el-table-column prop="orderNo" label="序号" width="72" align="center" />
           <el-table-column label="步骤名" min-width="180">
             <template #default="{ row }">
@@ -188,17 +221,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.detail-actions {
+.drawer-toolbar {
   margin-bottom: 12px;
   display: flex;
   gap: 8px;

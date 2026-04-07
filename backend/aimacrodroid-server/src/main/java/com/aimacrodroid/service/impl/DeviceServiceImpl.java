@@ -1,6 +1,7 @@
 package com.aimacrodroid.service.impl;
 
 import com.aimacrodroid.common.exception.BizException;
+import com.aimacrodroid.domain.dto.DeviceAliasUpdateReqDTO;
 import com.aimacrodroid.domain.dto.DeviceHeartbeatReqDTO;
 import com.aimacrodroid.domain.dto.DeviceRegisterReqDTO;
 import com.aimacrodroid.domain.entity.Device;
@@ -27,6 +28,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -57,10 +59,12 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         Device existingDevice = getByDeviceCode(req.getDeviceId());
         String token = UUID.randomUUID().toString().replace("-", "");
         String tokenHash = sha256(token);
+        String alias = resolveAlias(req.getAlias(), req.getDeviceId());
         Device current;
         if (existingDevice == null) {
             current = new Device();
             current.setDeviceCode(req.getDeviceId());
+            current.setAlias(alias);
             current.setBrand(req.getBrand());
             current.setModel(req.getModel());
             current.setAndroidVersion(req.getAndroidVersion());
@@ -73,6 +77,12 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
             current = getByDeviceCode(req.getDeviceId());
         } else {
             current = existingDevice;
+            if (!StringUtils.hasText(current.getAlias())) {
+                current.setAlias(current.getDeviceCode());
+            }
+            if (StringUtils.hasText(req.getAlias())) {
+                current.setAlias(alias);
+            }
             current.setBrand(req.getBrand());
             current.setModel(req.getModel());
             current.setAndroidVersion(req.getAndroidVersion());
@@ -111,17 +121,35 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
     }
 
     @Override
+    public List<Device> listDevices() {
+        List<Device> devices = this.list();
+        devices.forEach(device -> {
+            if (!StringUtils.hasText(device.getAlias())) {
+                device.setAlias(device.getDeviceCode());
+            }
+        });
+        return devices;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void updateAlias(String deviceId, DeviceAliasUpdateReqDTO req) {
+        Device device = getByDeviceCode(deviceId);
+        if (device == null) {
+            throw new BizException("DEVICE_NOT_FOUND", "设备不存在");
+        }
+        device.setAlias(resolveAlias(req.getAlias(), device.getDeviceCode()));
+        this.updateById(device);
+        auditLogService.record(deviceId, "DEVICE_ALIAS_UPDATE", "DEVICE", deviceId, "SUCCESS", new HashMap<>());
+    }
+
+    @Override
     public DeviceStatusVO getDeviceStatus(String deviceId) {
         Device device = getByDeviceCode(deviceId);
         if (device == null) {
             throw new BizException("DEVICE_NOT_FOUND", "设备不存在");
         }
-        String status = device.getDeviceStatus();
-        if ("ONLINE".equals(status) && device.getLastSeenAt() != null && device.getLastSeenAt().plusMinutes(3).isBefore(LocalDateTime.now())) {
-            status = "OFFLINE";
-            device.setDeviceStatus("OFFLINE");
-            this.updateById(device);
-        }
+        String status = resolveStatus(device);
         DeviceReadiness readiness = getLatestReadiness(device.getId());
         return DeviceStatusVO.builder()
                 .status(status)
@@ -299,6 +327,13 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         return step == null ? null : step.getId();
     }
 
+    private String resolveStatus(Device device) {
+        if (device == null || device.getLastSeenAt() == null) {
+            return "OFFLINE";
+        }
+        return device.getLastSeenAt().plusMinutes(3).isBefore(LocalDateTime.now()) ? "OFFLINE" : "ONLINE";
+    }
+
     private void upsertReadiness(Long devicePkId, Object shizuku, Object overlay, Object keyboard, Object sse, String foregroundPkg,
                                  Integer batteryPct, String networkType, Object charging) {
         LambdaQueryWrapper<DeviceReadiness> query = new LambdaQueryWrapper<>();
@@ -392,6 +427,13 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         Map<String, Object> wrapped = new HashMap<>();
         wrapped.put("value", value);
         return wrapped;
+    }
+
+    private String resolveAlias(String alias, String deviceCode) {
+        if (StringUtils.hasText(alias)) {
+            return alias.trim();
+        }
+        return deviceCode;
     }
 
     private Map<String, Object> toStepPayload(StepInstance stepInstance) {

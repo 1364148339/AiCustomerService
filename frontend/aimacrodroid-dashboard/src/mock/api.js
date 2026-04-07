@@ -1,5 +1,11 @@
 import axios from 'axios'
-import { randomUUID } from './utils'
+
+function randomUUID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
 
 const api = axios.create({
   baseURL: '/'
@@ -10,6 +16,13 @@ const localTaskMeta = new Map()
 
 function unwrap(resp) {
   return resp?.data?.data ?? resp?.data ?? null
+}
+
+function getListData(value) {
+  if (Array.isArray(value)) return value
+  if (Array.isArray(value?.records)) return value.records
+  if (Array.isArray(value?.list)) return value.list
+  return []
 }
 
 function boolFlag(value) {
@@ -28,6 +41,9 @@ function toArrayCapabilities(value) {
     } catch {
       return value.split(',').map((item) => item.trim()).filter(Boolean)
     }
+  }
+  if (Array.isArray(value?.items)) {
+    return value.items
   }
   return []
 }
@@ -105,186 +121,98 @@ function resolveFailureCategoryText(value) {
     ELEMENT: '元素问题',
     PAGE_STATE: '页面状态异常',
     ACTION_EXECUTION: '动作执行异常',
-    TIMEOUT: '执行超时',
-    SENSITIVE_SCREEN: '敏感页面拦截',
-    DATA: '数据问题',
-    UNRECOVERABLE: '不可恢复异常',
-    UNKNOWN: '未知'
+    SYSTEM: '系统异常',
+    UNKNOWN: '未知异常'
   }
-  return map[value] || '未知'
-}
-
-function resolveActionResultText(value) {
-  const map = {
-    SUCCESS: '成功',
-    TARGET_NOT_FOUND: '目标未找到',
-    NO_EFFECT: '执行无效',
-    PARTIAL: '部分完成',
-    INTERRUPTED: '执行中断',
-    INVALID_PARAM: '参数无效',
-    BLOCKED: '被阻塞',
-    SKIPPED: '已跳过',
-    UNKNOWN: '未知'
-  }
-  return map[value] || '未知'
-}
-
-function resolvePageTypeText(value) {
-  const map = {
-    UNKNOWN_PAGE: '未知页面',
-    HOME_PAGE: '首页',
-    DETAIL_PAGE: '详情页',
-    LIST_PAGE: '列表页',
-    SEARCH_PAGE: '搜索页',
-    LOGIN_PAGE: '登录页',
-    POPUP_PAGE: '弹窗页',
-    PERMISSION_PAGE: '权限页',
-    LOADING_PAGE: '加载页',
-    RESULT_PAGE: '结果页',
-    SENSITIVE_PAGE: '敏感页',
-    EXTERNAL_PAGE: '外部页面'
-  }
-  return map[value] || '未知页面'
+  return map[value] || value || '未知异常'
 }
 
 function mapEvent(item) {
   const progress = readEventProgress(item)
-  const stepNo = Number(item.stepNo || item.currentStepNo || progress.stepNo || 0)
-  const eventType = item.eventType || ''
-  const eventTypeDesc = item.eventTypeDesc || ''
-  const status = item.status || item.eventStatus || 'RUNNING'
-  const resultDesc = item.resultDesc || (status === 'SUCCESS'
-    ? '执行成功'
-    : status === 'FAIL'
-      ? '执行失败'
-      : '执行中')
-  const stepName = item.stepName || ''
-  const stageDesc = item.stageDesc || `${stepNo > 0 ? `第${stepNo}步` : '步骤信息缺失'}${stepName ? `（${stepName}）` : ''}：${resultDesc}`
-  const failureCategory = item.failureCategory || progress.failureCategory || ''
-  const recoverableRaw = item.recoverable ?? progress.recoverable
-  const actionResult = item.actionResult || progress.actionResult || ''
-  const pageType = item.pageType || progress.pageType || ''
-  const pageSignature = item.pageSignature || progress.pageSignature || ''
-  const targetResolvedRaw = item.targetResolved ?? progress.targetResolved
+  const screenshotUrl = item.screenshotUrl || progress.screenshotUrl || ''
   return {
-    eventNo: item.eventNo || '',
-    taskId: String(item.taskId),
-    deviceId: item.deviceId || item.deviceCode || '--',
-    stepInstanceId: item.stepInstanceId || null,
-    commandId: item.commandId || String(item.stepInstanceId || '--'),
-    status,
-    eventStatus: status,
-    eventType,
-    eventTypeDesc: eventTypeDesc || (eventType ? eventType.replaceAll('_', ' ') : '未知事件'),
-    timestamp: parseTimestamp(item.eventTimestamp || item.occurredAt || item.gmtCreate),
-    thinking: item.thinking || item.thinkingText || '',
-    thinkingText: item.thinkingText || item.thinking || '',
-    screenshotUrl: item.screenshotUrl || '',
-    traceJson: safeJsonStringify(item.traceJson || item.trace || ''),
-    elementJson: safeJsonStringify(item.elementJson || item.elements || item.element || ''),
-    stepNo,
-    stepName,
-    resultDesc,
-    stageDesc,
-    sensitiveScreenDetected: boolFlag(item.sensitiveScreenDetected ?? item.isSensitiveScreen),
-    errorCode: item.errorCode || '',
-    errorMessage: item.errorMessage || '',
-    progress,
-    durationMs: item.durationMs || 0,
-    failureCategory,
-    failureCategoryText: resolveFailureCategoryText(failureCategory),
-    recoverable: recoverableRaw === null || recoverableRaw === undefined ? null : boolFlag(recoverableRaw),
-    actionResult,
-    actionResultText: resolveActionResultText(actionResult),
-    pageType,
-    pageTypeText: resolvePageTypeText(pageType),
-    pageSignature,
-    targetResolved: targetResolvedRaw === null || targetResolvedRaw === undefined ? null : boolFlag(targetResolvedRaw)
+    id: String(item.id || randomUUID()),
+    taskId: String(item.taskId || ''),
+    runId: String(item.runId || ''),
+    deviceId: item.deviceId || progress.deviceId || '--',
+    stepNo: Number(progress.stepNo || item.stepNo || 0),
+    stepInstanceId: String(item.stepInstanceId || progress.stepInstanceId || ''),
+    eventType: item.eventType || item.type || 'RUN_EVENT',
+    stageDesc: item.stageDesc || progress.stageDesc || item.eventStatus || '--',
+    status: item.eventStatus || item.status || 'RUNNING',
+    errorCode: item.errorCode || progress.errorCode || '',
+    errorMessage: item.errorMessage || progress.errorMessage || '',
+    failureCategory: resolveFailureCategoryText(item.failureCategory || progress.failureCategory),
+    latencyMs: Number(progress.latencyMs || item.latencyMs || 0),
+    modelTokens: Number(progress.modelTokens || item.modelTokens || 0),
+    screenshotUrl,
+    timestamp: parseTimestamp(item.occurredAt || item.createdAt || item.gmtCreate),
+    raw: item
   }
 }
 
-function normalizeScenario(raw) {
+function calcTaskMetrics(events, runs) {
+  const successCount = events.filter((item) => item.status === 'SUCCESS').length
+  const failCount = events.filter((item) => item.status === 'FAIL').length
+  const latencyAvg = events.length
+    ? Math.round(events.reduce((sum, item) => sum + Number(item.latencyMs || 0), 0) / events.length)
+    : 0
+  const tokens = events.reduce((sum, item) => sum + Number(item.modelTokens || 0), 0)
   return {
-    scenarioId: String(raw.scenarioId || raw.id || ''),
-    scenarioKey: raw.scenarioKey || '',
-    scenarioName: raw.scenarioName || raw.name || '',
-    description: raw.description || raw.scenarioDesc || '',
-    status: raw.status || 'DRAFT',
-    versionNo: Number(raw.versionNo || 1),
-    updatedAt: raw.updatedAt || raw.gmtModified || raw.gmtCreate || new Date().toISOString(),
-    taskType: raw.taskType || 'CHECKIN'
+    runCount: runs.length,
+    successCount,
+    failCount,
+    avgLatencyMs: latencyAvg,
+    totalModelTokens: tokens
   }
 }
 
-function normalizeStep(step, index) {
-  const enabledByLegacy = step.enabled !== false && step.enabled !== 0
-  const enabledByBackend = step.isEnabled === undefined ? true : boolFlag(step.isEnabled)
+function normalizeScenario(item) {
   return {
-    stepId: step.stepId || `local-step-${index + 1}`,
-    orderNo: Number(step.orderNo || step.stepNo || index + 1),
-    stepName: step.stepName || '',
-    action: step.action || step.actionCode || '',
-    params: step.params || step.actionParams || {},
-    timeoutMs: Number(step.timeoutMs || 5000),
-    retryPolicy: step.retryPolicy || { maxRetries: Number(step.retryMax || 0), backoffMs: Number(step.retryBackoffMs || 1000) },
-    enabled: enabledByLegacy && enabledByBackend
+    id: String(item.id || item.scenarioId || item.scenarioKey || ''),
+    scenarioKey: item.scenarioKey || '',
+    scenarioName: item.scenarioName || item.name || '',
+    description: item.description || '',
+    status: item.status || 'DRAFT',
+    latestVersion: item.latestVersion ?? item.version ?? 1,
+    updatedAt: parseTimestamp(item.gmtModified || item.updatedAt || item.gmtCreate)
+  }
+}
+
+function normalizeStep(item) {
+  return {
+    id: String(item.id || item.stepId || randomUUID()),
+    stepNo: Number(item.stepNo || item.orderNum || 0),
+    stepName: item.stepName || item.name || '',
+    actionCode: item.actionCode || item.action || '',
+    timeoutMs: Number(item.timeoutMs || 0),
+    retryMax: Number(item.retryMax || 0),
+    retryBackoffMs: Number(item.retryBackoffMs || 0),
+    actionParams: item.actionParams || item.params || {}
   }
 }
 
 function summarizeTask(task, runs) {
-  const taskId = String(task.id)
-  const meta = localTaskMeta.get(taskId) || {}
   const constraints = resolveTaskConstraints(task)
-  const scenarioKey = constraints?.scenarioKey || task?.scenarioKey || meta.scenarioKey || ''
-  const scenarioName = constraints?.scenarioName || task?.scenarioName || meta.scenarioName || ''
-  const success = runs.filter((r) => resolveRunStatus(r) === 'SUCCESS').length
-  const fail = runs.filter((r) => resolveRunStatus(r) === 'FAIL').length
-  const running = runs.filter((r) => ['RUNNING', 'PENDING'].includes(resolveRunStatus(r))).length
+  const scenarioKey = constraints?.scenarioKey || task.scenarioKey || ''
+  const scenarioName = constraints?.scenarioName || task.scenarioName || localTaskMeta.get(String(task.id || ''))?.scenarioName || ''
   return {
-    taskId,
+    id: String(task.id || ''),
     taskNo: task.taskNo || '',
-    name: task.name || '',
-    type: task.type || '',
-    track: task.trackType || '',
-    status: task.status || '',
+    name: task.name || task.taskNo || '',
     scenarioKey,
     scenarioName,
-    intent: task.intent || '',
+    status: task.status || 'QUEUED',
+    statusText: resolveTaskStatusText(task.status || 'QUEUED'),
+    track: task.trackType || '',
     priority: task.priority ?? 5,
+    intent: task.intent || '',
+    targetDeviceIds: runs.map((item) => String(item.deviceCode || item.deviceId || item.id || '')),
     createdAt: parseTimestamp(task.gmtCreate),
-    devices: runs.map((r) => r.deviceId),
-    progress: { success, fail, running }
-  }
-}
-
-function toAlertType(event) {
-  const code = String(event.errorCode || '')
-  if (code.includes('TIMEOUT')) return 'TIMEOUT'
-  if (code.includes('NOT_FOUND')) return 'ELEMENT_NOT_FOUND'
-  if (code.includes('SHIZUKU') || code.includes('OVERLAY') || code.includes('KEYBOARD')) return 'READINESS'
-  return 'TASK_FAILURE'
-}
-
-function calcTaskMetrics(events, runs) {
-  const latestProgress = {}
-  events.forEach((event) => {
-    latestProgress[event.deviceId] = event.progress || {}
-  })
-  const watchedDurationMs = Object.values(latestProgress).reduce(
-    (sum, item) => sum + Number(item.watchedDurationMs || 0),
-    0
-  )
-  const itemsCompleted = Object.values(latestProgress).reduce(
-    (sum, item) => sum + Number(item.itemsCompleted || 0),
-    0
-  )
-  const alertCount = events.filter((item) => item.status === 'FAIL' || item.errorCode).length
-  const retryCount = runs.reduce((sum, item) => sum + Number(item.retryCount || 0), 0)
-  return {
-    watchedDurationMs,
-    itemsCompleted,
-    alertCount,
-    retryCount
+    updatedAt: parseTimestamp(task.gmtModified),
+    deviceRuns: runs,
+    constraints,
+    observability: task.observability || task.observabilityJson || {}
   }
 }
 
@@ -298,6 +226,7 @@ export async function getDevices() {
   const list = await Promise.all(
     devices.map(async (item) => {
       const deviceId = String(item.deviceId || item.deviceCode || item.id || '')
+      const alias = String(item.alias || deviceId)
       const status = String(item.status || item.deviceStatus || '').toUpperCase()
       let readiness = null
       try {
@@ -310,6 +239,8 @@ export async function getDevices() {
       }
       return {
         id: deviceId,
+        alias,
+        displayName: alias || deviceId,
         brand: item.brand || '',
         model: item.model || '',
         androidVersion: item.androidVersion || '--',
@@ -336,6 +267,11 @@ export async function getDevices() {
       runningCount: runningTaskCount
     }
   }
+}
+
+export async function updateDeviceAlias(deviceId, alias) {
+  await api.put(`/api/devices/${deviceId}/alias`, { alias })
+  return true
 }
 
 export async function getTasks() {
@@ -365,7 +301,7 @@ export async function createTask(payload) {
     type: payload.type,
     trackType: payload.track,
     intent: payload.intent,
-    targetDeviceIds: payload.targetDeviceIds,
+    targetDeviceIds: payload.targetDeviceIds || payload.devices || [],
     priority: payload.priority,
     constraints: payload.constraints,
     commandTemplate: payload.commandTemplate
@@ -452,7 +388,7 @@ export async function getTaskAlerts(taskId) {
 
 export async function getScenarios() {
   const resp = await api.get('/api/scenarios')
-  const list = (unwrap(resp) || []).map(normalizeScenario)
+  const list = getListData(unwrap(resp)).map(normalizeScenario)
   localScenarioList.splice(0, localScenarioList.length, ...list)
   return list
 }
@@ -460,8 +396,95 @@ export async function getScenarios() {
 export async function getScenarioDetail(scenarioId) {
   const resp = await api.get(`/api/scenarios/${scenarioId}`)
   const raw = unwrap(resp) || {}
+  const scenario = raw.scenario || raw
   return {
-    ...normalizeScenario(raw),
-    steps: (raw.steps || []).map(normalizeStep)
+    ...normalizeScenario(scenario),
+    steps: (raw.steps || scenario.steps || []).map(normalizeStep)
   }
+}
+
+export async function createScenario(payload) {
+  const resp = await api.post('/api/scenarios', payload)
+  return normalizeScenario(unwrap(resp) || {})
+}
+
+export async function saveScenarioSteps(scenarioKey, steps) {
+  await api.put(`/api/scenarios/${scenarioKey}/steps`, { steps })
+  return true
+}
+
+export async function publishScenario(scenarioKey) {
+  const resp = await api.post(`/api/scenarios/${scenarioKey}/publish`)
+  return normalizeScenario(unwrap(resp) || {})
+}
+
+function normalizeAlert(item) {
+  return {
+    id: String(item.id || item.alertId || randomUUID()),
+    taskId: String(item.taskId || ''),
+    deviceId: item.deviceId || '--',
+    level: item.level || item.severity || 'P2',
+    type: item.type || 'TASK_FAILURE',
+    code: item.code || item.errorCode || '',
+    reason: item.reason || item.message || item.summary || '',
+    status: item.status || 'OPEN',
+    createdAt: parseTimestamp(item.createdAt || item.gmtCreate)
+  }
+}
+
+export async function getAlerts(filters = {}) {
+  const resp = await api.get('/api/alerts', {
+    params: {
+      taskId: filters.taskId || undefined
+    }
+  })
+  let list = getListData(unwrap(resp)).map(normalizeAlert)
+  if (filters.alertLevel) {
+    list = list.filter((item) => item.level === filters.alertLevel)
+  }
+  if (filters.alertType) {
+    list = list.filter((item) => item.type === filters.alertType)
+  }
+  if (filters.status) {
+    list = list.filter((item) => item.status === filters.status)
+  }
+  return list.sort((a, b) => b.createdAt - a.createdAt)
+}
+
+export async function ackAlert(alertId) {
+  await api.post(`/api/alerts/${alertId}/ack`)
+  return true
+}
+
+export async function closeAlert(alertId, reason = '') {
+  await api.post(`/api/alerts/${alertId}/close`, null, {
+    params: {
+      reason: reason || undefined
+    }
+  })
+  return true
+}
+
+function toAlertType(event) {
+  switch (event.failureCategory) {
+    case '权限问题':
+      return 'PERMISSION'
+    case '网络异常':
+      return 'NETWORK'
+    case '环境异常':
+      return 'ENVIRONMENT'
+    default:
+      return 'TASK_FAILURE'
+  }
+}
+
+export async function getLogs(filters = {}) {
+  const resp = await api.get('/api/devices/events', {
+    params: {
+      taskId: filters.taskId || undefined,
+      deviceId: filters.deviceId || undefined
+    }
+  })
+  const list = getListData(unwrap(resp)).map(mapEvent)
+  return list.sort((a, b) => b.timestamp - a.timestamp)
 }

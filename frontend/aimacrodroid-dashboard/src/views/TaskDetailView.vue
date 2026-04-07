@@ -18,6 +18,21 @@ const deviceFilter = computed({
   get: () => tasksStore.detailDeviceFilter,
   set: (value) => tasksStore.setDetailDeviceFilter(value)
 })
+const currentTaskId = computed(() => String(route.params.id || ''))
+
+const detailMetrics = computed(() => {
+  const data = detail.value
+  if (!data) {
+    return { devices: 0, finished: 0, errors: 0, evidences: 0 }
+  }
+  return {
+    devices: data.deviceRuns?.length || 0,
+    finished: (data.deviceRuns || []).filter((item) => ['SUCCESS', 'FAIL', 'CANCELED'].includes(item.runStatus || item.status)).length,
+    errors: (data.events || []).filter((item) => item.eventType === 'FAILED' || item.errorCode).length,
+    evidences: evidences.value.length
+  }
+})
+
 const flowOverview = computed(() => {
   const data = detail.value
   if (!data) return null
@@ -66,11 +81,9 @@ const flowOverview = computed(() => {
   }
 })
 
-const currentTaskId = computed(() => String(route.params.id || ''))
-
 function loadDetail(taskId) {
   if (!taskId) return
-  tasksStore.fetchDetail(taskId)
+  tasksStore.refreshDetail(taskId)
 }
 
 function refreshCurrentDetail() {
@@ -191,21 +204,48 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="task-detail-view" v-loading="detailLoading">
+  <div class="page-shell task-detail-view" v-loading="detailLoading">
     <template v-if="detail">
-      <el-card shadow="never" class="mb-4">
+      <div class="metric-grid">
+        <el-card shadow="hover" class="metric-card metric-card--blue">
+          <div class="metric-card__label">目标设备</div>
+          <div class="metric-card__value">{{ detailMetrics.devices }}</div>
+          <div class="metric-card__sub">参与本次任务的设备总数</div>
+        </el-card>
+        <el-card shadow="hover" class="metric-card metric-card--green">
+          <div class="metric-card__label">已结束设备</div>
+          <div class="metric-card__value">{{ detailMetrics.finished }}</div>
+          <div class="metric-card__sub">成功、失败或取消均计入</div>
+        </el-card>
+        <el-card shadow="hover" class="metric-card metric-card--orange">
+          <div class="metric-card__label">异常事件</div>
+          <div class="metric-card__value">{{ detailMetrics.errors }}</div>
+          <div class="metric-card__sub">含失败事件和错误码事件</div>
+        </el-card>
+        <el-card shadow="hover" class="metric-card metric-card--purple">
+          <div class="metric-card__label">截图证据</div>
+          <div class="metric-card__value">{{ detailMetrics.evidences }}</div>
+          <div class="metric-card__sub">辅助定位失败原因</div>
+        </el-card>
+      </div>
+
+      <el-card shadow="never" class="page-card">
         <template #header>
-          <div class="card-header">
-            <span>任务详情与进度看板 {{ detail.taskNo || detail.taskId }}</span>
-            <div class="header-tags">
-              <el-tag>{{ detail.scenarioName || detail.scenarioKey || '未绑定场景' }}</el-tag>
-              <el-tag :type="statusTagType(detail.status)">{{ statusText(detail.status) }}</el-tag>
+          <div class="page-header">
+            <div class="page-header__main">
+              <div class="page-header__title">任务详情与进度看板 {{ detail.taskNo || detail.taskId }}</div>
+              <div class="page-header__desc">聚合展示任务状态、设备执行情况、时间线事件与失败决策摘要。</div>
+            </div>
+            <div class="page-header__actions">
+              <el-tag effect="plain" round>{{ detail.scenarioName || detail.scenarioKey || '未绑定场景' }}</el-tag>
+              <el-tag :type="statusTagType(detail.status)" effect="light" round>{{ statusText(detail.status) }}</el-tag>
               <el-button @click="refreshCurrentDetail">手动刷新</el-button>
               <el-button link type="primary" @click="jumpToAlerts">查看告警</el-button>
             </div>
           </div>
         </template>
-        <el-descriptions border :column="2">
+
+        <el-descriptions border :column="2" class="detail-descriptions">
           <el-descriptions-item label="任务类型">{{ detail.type }}</el-descriptions-item>
           <el-descriptions-item label="轨道">{{ detail.track }}</el-descriptions-item>
           <el-descriptions-item label="优先级">{{ detail.priority }}</el-descriptions-item>
@@ -217,56 +257,71 @@ onBeforeUnmount(() => {
         </el-descriptions>
       </el-card>
 
-      <el-row :gutter="16" class="mb-4" v-if="flowOverview">
-        <el-col :span="6" v-for="(item, key) in flowOverview" :key="key">
-          <el-card shadow="never" class="flow-card">
-            <div class="flow-card__title">
-              <span>{{ key === 'publish' ? '发布' : key === 'receive' ? '接收' : key === 'process' ? '处理' : '结果' }}</span>
-              <el-tag size="small" :type="flowTagType(item.ok)">{{ item.text }}</el-tag>
-            </div>
-            <div class="flow-card__detail">{{ item.detail }}</div>
-          </el-card>
-        </el-col>
-      </el-row>
+      <div class="metric-grid" v-if="flowOverview">
+        <el-card v-for="(item, key) in flowOverview" :key="key" shadow="never" class="metric-card flow-card">
+          <div class="flow-card__title">
+            <span>{{ key === 'publish' ? '发布' : key === 'receive' ? '接收' : key === 'process' ? '处理' : '结果' }}</span>
+            <el-tag size="small" :type="flowTagType(item.ok)" effect="light" round>{{ item.text }}</el-tag>
+          </div>
+          <div class="metric-card__sub flow-card__detail">{{ item.detail }}</div>
+        </el-card>
+      </div>
 
       <el-row :gutter="16">
         <el-col :span="8">
-          <el-card shadow="never" class="mb-4">
+          <el-card shadow="never" class="page-card device-panel">
             <template #header>
-              <div class="card-header">
-                <span>设备执行情况</span>
-                <el-button link @click="clearDeviceFilter" v-if="deviceFilter">清空筛选</el-button>
+              <div class="page-header">
+                <div class="page-header__main">
+                  <div class="page-header__title">设备执行情况</div>
+                  <div class="page-header__desc">按设备筛选时间线，快速聚焦异常节点。</div>
+                </div>
+                <div class="page-header__actions">
+                  <el-button link @click="clearDeviceFilter" v-if="deviceFilter">清空筛选</el-button>
+                </div>
               </div>
             </template>
-            <div class="device-run-list">
-              <el-card
+            <div v-if="detail.deviceRuns?.length" class="device-run-list">
+              <div
                 v-for="run in detail.deviceRuns"
                 :key="run.deviceId"
-                shadow="hover"
-                class="device-run-card"
+                class="device-run-card is-clickable"
                 :class="{ active: deviceFilter === run.deviceId }"
                 @click="pickDevice(run.deviceId)"
               >
                 <div class="device-run-card__header">
-                  <span>{{ run.deviceId }}</span>
-                  <el-tag size="small" :type="runStatusType(run.runStatus || run.status)">{{ run.statusText || statusText(run.runStatus || run.status) }}</el-tag>
+                  <span class="device-run-card__id">{{ run.deviceId }}</span>
+                  <el-tag size="small" :type="runStatusType(run.runStatus || run.status)" effect="light" round>
+                    {{ run.statusText || statusText(run.runStatus || run.status) }}
+                  </el-tag>
                 </div>
                 <div class="device-run-card__meta">当前步骤：{{ run.currentStepNo || '--' }}</div>
                 <div class="device-run-card__meta">重试次数：{{ run.retryCount || 0 }}</div>
                 <div class="device-run-card__meta" v-if="run.errorCode">错误码：{{ run.errorCode }}</div>
                 <div class="device-run-card__meta" v-if="run.errorMessage">错误信息：{{ run.errorMessage }}</div>
-              </el-card>
-              <el-empty v-if="!detail.deviceRuns?.length" description="暂无设备执行记录" />
+              </div>
+            </div>
+            <div v-else class="empty-state empty-state--compact">
+              <div class="empty-state__title">设备侧暂未回传执行记录</div>
+              <div class="empty-state__desc">任务可能仍在派发阶段，或设备还未开始执行。可以稍后刷新，继续观察 ACK 和事件流转。</div>
+              <div class="empty-state__actions">
+                <el-button type="primary" plain @click="refreshCurrentDetail">刷新详情</el-button>
+              </div>
             </div>
           </el-card>
         </el-col>
 
         <el-col :span="16">
-          <el-card shadow="never">
+          <el-card shadow="never" class="page-card">
             <template #header>
-              <div class="card-header">
-                <span>执行时间线</span>
-                <el-tag type="info">{{ orderedEventLines.length }} 条事件</el-tag>
+              <div class="page-header">
+                <div class="page-header__main">
+                  <div class="page-header__title">执行时间线</div>
+                  <div class="page-header__desc">查看设备执行轨迹、失败原因与关联截图证据。</div>
+                </div>
+                <div class="page-header__actions">
+                  <el-tag type="info" effect="plain" round>{{ orderedEventLines.length }} 条事件</el-tag>
+                </div>
               </div>
             </template>
             <div class="timeline-wrapper">
@@ -277,11 +332,13 @@ onBeforeUnmount(() => {
                   :timestamp="new Date(ev.timestamp).toLocaleString()"
                   :type="ev.eventType === 'FAILED' || ev.errorCode ? 'danger' : ev.eventType === 'COMPLETED' ? 'success' : 'primary'"
                 >
-                  <el-card shadow="hover" class="event-card">
+                  <div class="soft-panel event-card">
                     <div class="event-card__header">
-                      <span>{{ ev.deviceId }}</span>
-                      <el-tag size="small">步骤{{ ev.stepNo || '--' }}</el-tag>
-                      <el-tag size="small" :type="eventTypeTagType(ev.eventType)">{{ ev.eventTypeDesc || ev.eventType || '未知事件' }}</el-tag>
+                      <span class="event-card__device">{{ ev.deviceId }}</span>
+                      <el-tag size="small" effect="light" round>步骤{{ ev.stepNo || '--' }}</el-tag>
+                      <el-tag size="small" :type="eventTypeTagType(ev.eventType)" effect="light" round>
+                        {{ ev.eventTypeDesc || ev.eventType || '未知事件' }}
+                      </el-tag>
                     </div>
                     <div class="event-text">事件号：{{ ev.eventNo || '--' }}</div>
                     <div class="event-text">步骤实例ID：{{ ev.stepInstanceId || '--' }}</div>
@@ -291,8 +348,8 @@ onBeforeUnmount(() => {
                     <div class="event-text">错误信息：{{ ev.errorMessage || '--' }}</div>
                     <div class="event-text">持续时长：{{ ev.durationMs }}ms</div>
                     <div class="event-text" v-if="ev.sensitiveScreenDetected">敏感页面：已检测</div>
-                    <div class="decision-summary" v-if="showDecisionSummary(ev)">
-                      <div class="decision-summary__title">失败决策摘要</div>
+                    <div class="soft-panel decision-summary" v-if="showDecisionSummary(ev)">
+                      <div class="panel-title decision-summary__title">失败决策摘要</div>
                       <div class="event-text">失败类别：{{ ev.failureCategoryText || '未知' }}</div>
                       <div class="event-text">动作结果：{{ ev.actionResultText || '未知' }}</div>
                       <div class="event-text">页面类型：{{ ev.pageTypeText || '未知页面' }}</div>
@@ -314,57 +371,56 @@ onBeforeUnmount(() => {
                     <el-button v-if="ev.eventType === 'FAILED' || ev.errorCode" link type="danger" @click="locateEventAlert(ev)">
                       跳转告警定位
                     </el-button>
-                  </el-card>
+                  </div>
                 </el-timeline-item>
               </el-timeline>
-              <el-empty v-else description="暂无事件记录" />
+              <div v-else class="empty-state">
+                <div class="empty-state__title">还没有可展示的执行时间线</div>
+                <div class="empty-state__desc">设备还未上报事件，或当前设备筛选条件下没有匹配记录。你可以清空筛选后重新刷新查看。</div>
+                <div class="empty-state__actions">
+                  <el-button type="primary" plain @click="refreshCurrentDetail">刷新详情</el-button>
+                  <el-button v-if="deviceFilter" @click="clearDeviceFilter">清空设备筛选</el-button>
+                </div>
+              </div>
             </div>
           </el-card>
         </el-col>
       </el-row>
     </template>
+    <div v-else-if="!detailLoading" class="empty-state">
+      <div class="empty-state__title">未找到任务详情</div>
+      <div class="empty-state__desc">可能是任务编号不存在，或者详情数据尚未成功返回。可以回到任务列表重新进入，或稍后手动刷新。</div>
+      <div class="empty-state__actions">
+        <el-button type="primary" @click="router.push('/tasks')">返回任务列表</el-button>
+        <el-button @click="refreshCurrentDetail">重新加载</el-button>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.task-detail-view {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.mb-4 {
-  margin-bottom: 16px;
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.header-tags {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.detail-descriptions :deep(.el-descriptions__label) {
+  width: 120px;
 }
 
 .flow-card {
-  min-height: 110px;
+  min-height: 120px;
 }
 
 .flow-card__title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .flow-card__detail {
-  color: var(--el-text-color-secondary);
   line-height: 1.6;
+}
+
+.device-panel {
+  height: 100%;
 }
 
 .device-run-list {
@@ -374,22 +430,38 @@ onBeforeUnmount(() => {
 }
 
 .device-run-card {
-  cursor: pointer;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background: var(--surface-2);
+}
+
+.device-run-card:hover {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
 }
 
 .device-run-card.active {
-  border-color: var(--el-color-primary);
+  border-color: var(--brand-2);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-soft);
 }
 
 .device-run-card__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
 }
 
+.device-run-card__id {
+  font-weight: 700;
+  color: var(--text-1);
+}
+
 .device-run-card__meta {
-  color: var(--el-text-color-secondary);
+  color: var(--text-3);
   line-height: 1.8;
 }
 
@@ -399,31 +471,33 @@ onBeforeUnmount(() => {
 }
 
 .event-card {
-  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .event-card__header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
   flex-wrap: wrap;
+}
+
+.event-card__device {
+  font-weight: 700;
+  color: var(--text-1);
 }
 
 .event-text {
   line-height: 1.8;
-  color: var(--el-text-color-regular);
+  color: var(--text-2);
 }
 
 .decision-summary {
-  margin-top: 10px;
-  padding: 10px 12px;
-  background: var(--el-fill-color-light);
-  border-radius: 8px;
+  margin-top: 8px;
 }
 
 .decision-summary__title {
-  font-weight: 600;
   margin-bottom: 6px;
 }
 
@@ -431,7 +505,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .evidence-link {

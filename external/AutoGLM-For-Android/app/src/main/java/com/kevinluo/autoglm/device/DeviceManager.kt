@@ -11,27 +11,17 @@ import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import com.kevinluo.autoglm.ComponentManager
-import java.util.UUID
 
 /**
  * Manages and collects device information.
  */
 class DeviceManager(private val context: Context) {
 
-    private val prefs = context.getSharedPreferences("device_manager_prefs", Context.MODE_PRIVATE)
-
     /**
      * Unique identifier for this device.
      */
     val deviceId: String
-        get() {
-            var id = prefs.getString("device_id", null)
-            if (id == null) {
-                id = UUID.randomUUID().toString()
-                prefs.edit().putString("device_id", id).apply()
-            }
-            return id
-        }
+        get() = "android-${Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)}"
 
     val brand: String
         get() = Build.BRAND

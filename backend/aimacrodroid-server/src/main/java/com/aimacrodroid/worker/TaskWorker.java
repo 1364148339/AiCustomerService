@@ -1,10 +1,12 @@
 package com.aimacrodroid.worker;
 
+import com.aimacrodroid.domain.entity.Device;
 import com.aimacrodroid.domain.entity.RunEvent;
 import com.aimacrodroid.domain.entity.RunEventType;
 import com.aimacrodroid.domain.entity.StepInstance;
 import com.aimacrodroid.domain.entity.Task;
 import com.aimacrodroid.domain.entity.TaskDeviceRun;
+import com.aimacrodroid.mapper.DeviceMapper;
 import com.aimacrodroid.mapper.RunEventMapper;
 import com.aimacrodroid.mapper.StepInstanceMapper;
 import com.aimacrodroid.mapper.TaskDeviceRunMapper;
@@ -33,6 +35,7 @@ public class TaskWorker {
     private final TaskDeviceRunMapper taskDeviceRunMapper;
     private final StepInstanceMapper stepInstanceMapper;
     private final RunEventMapper runEventMapper;
+    private final DeviceMapper deviceMapper;
     private final AlertService alertService;
     private final AuditLogService auditLogService;
     private final WorkerDispatchProperties dispatchProperties;
@@ -64,6 +67,21 @@ public class TaskWorker {
             if (isTimedOut(run)) {
                 markRunTimeout(run);
             }
+        }
+    }
+
+    @Scheduled(fixedDelay = 180000)
+    @Transactional(rollbackFor = Exception.class)
+    public void scanOfflineDevices() {
+        LocalDateTime threshold = LocalDateTime.now().minusMinutes(3);
+        LambdaUpdateWrapper<Device> update = new LambdaUpdateWrapper<>();
+        update.eq(Device::getDeviceStatus, "ONLINE")
+                .isNotNull(Device::getLastSeenAt)
+                .lt(Device::getLastSeenAt, threshold)
+                .set(Device::getDeviceStatus, "OFFLINE");
+        int updated = deviceMapper.update(null, update);
+        if (updated > 0) {
+            log.info("设备离线扫描完成，标记离线数量={}", updated);
         }
     }
 

@@ -1,6 +1,7 @@
 package com.aimacrodroid.controller;
 
 import com.aimacrodroid.common.api.Result;
+import com.aimacrodroid.domain.dto.DeviceAliasUpdateReqDTO;
 import com.aimacrodroid.domain.dto.DeviceHeartbeatReqDTO;
 import com.aimacrodroid.domain.dto.DeviceRegisterReqDTO;
 import com.aimacrodroid.domain.entity.Device;
@@ -40,6 +41,15 @@ public class DeviceController {
         return Result.success();
     }
 
+    @Operation(summary = "更新设备别名", description = "修改设备展示别名")
+    @PutMapping("/{id}/alias")
+    @RequireRoles({OperatorRole.ADMIN, OperatorRole.OPS})
+    public Result<Void> updateAlias(@PathVariable("id") String deviceId,
+                                    @Validated @RequestBody DeviceAliasUpdateReqDTO req) {
+        deviceService.updateAlias(deviceId, req);
+        return Result.success();
+    }
+
     @Operation(summary = "获取设备状态", description = "获取设备的实时状态、前台包名和最近心跳")
     @GetMapping("/{id}/status")
     @RequireRoles({OperatorRole.ADMIN, OperatorRole.OPS, OperatorRole.READONLY})
@@ -64,6 +74,6 @@ public class DeviceController {
     @GetMapping
     @RequireRoles({OperatorRole.ADMIN, OperatorRole.OPS, OperatorRole.READONLY})
     public Result<List<Device>> listAll() {
-        return Result.success(deviceService.list());
+        return Result.success(deviceService.listDevices());
     }
 }
